@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bari AMTAB • Realtime Bus Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f2f2f7;color:#1c1c1e}
+.hdr{background:#fff;border-bottom:1px solid #e5e5ea;padding:10px 16px;display:flex;align-items:center;justify-content:space-between}
+.hl{display:flex;align-items:center;gap:10px}
+.hl h1{font-size:1.1rem;font-weight:700}
+.hl .sub{font-size:.75rem;color:#8e8e93}
+.st{display:flex;align-items:center;gap:5px;font-size:.75rem;color:#8e8e93}
+.dot{width:7px;height:7px;background:#34d399;border-radius:50%;box-shadow:0 0 0 3px rgba(52,211,153,.2);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+#map{width:100%;height:calc(100vh - 48px)}
+.leaflet-popup-content-wrapper{border-radius:12px!important;padding:0!important;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.15)!important}
+.leaflet-popup-content{margin:0!important;padding:0!important;min-width:180px}
+.leaflet-popup-tip{box-shadow:none!important}
+.pb{padding:10px 14px;font-size:.82rem}
+.pb .nm{font-weight:600;font-size:.9rem;margin-bottom:4px}
+.pb .rt{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.8rem}
+.pb .rt .bd{display:inline-block;min-width:28px;padding:1px 6px;border-radius:5px;font-weight:700;font-size:.75rem;text-align:center;color:#fff}
+.pb .rt .tm{color:#8e8e93;font-size:.75rem}
+#tgl{position:absolute;top:74px;left:16px;z-index:1000;background:#fff;border:1px solid #e5e5ea;border-radius:8px;padding:6px 12px;font-size:.78rem;font-weight:500;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08);color:#1c1c1e;user-select:none}
+#tgl:hover{background:#f2f2f7}
+#ts{position:absolute;bottom:24px;left:16px;z-index:1000;background:#fff;padding:4px 12px;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.08);font-size:.73rem;font-weight:500;color:#2563eb;border:1px solid #e5e5ea}
+</style>
+</head>
+<body>
+<div class="hdr">
+<div class="hl"><h1>Bari</h1><span class="sub">AMTAB • Realtime</span></div>
+<div class="st"><div class="dot"></div><span>live</span></div>
+</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+var map = L.map('map',{center:[41.1055,16.8405],zoom:12,zoomControl:true});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'}).addTo(map);
+
+// Controls
+var tsCtrl = L.control({position:'bottomleft'});
+tsCtrl.onAdd=function(){var d=L.DomUtil.create('div','');d.id='ts';d.textContent='...';return d;};
+tsCtrl.addTo(map);
+var cntCtrl = L.control({position:'topright'});
+cntCtrl.onAdd=function(){var d=L.DomUtil.create('div','');d.id='cnt';d.textContent='...';d.style.cssText='background:#fff;padding:4px 10px;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.08);font-size:.73rem;font-weight:600;color:#8e8e93;border:1px solid #e5e5ea;';return d;};
+cntCtrl.addTo(map);
+
+// Toggle button for stops
+var btn = L.DomUtil.create('div','');
+btn.id='tgl';btn.textContent='Show stops';btn.style.display='none';
+L.DomEvent.on(btn,'click',function(){toggleStops();});
+map.getContainer().appendChild(btn);
+
+// State
+var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},stopsVisible=false;
+
+// Load data
+fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
+  routeColors=d;
+  Object.keys(routeColors).forEach(function(k){
+    var r=routeColors[k];
+    r._bg=(r.route_color&&/^[0-9A-Fa-f]{6}$/.test(r.route_color))?'#'+r.route_color:genColor(r.route_short_name||k);
+    r._fg=(r.route_text_color&&/^[0-9A-Fa-f]{6}$/.test(r.route_text_color))?'#'+r.route_text_color:'#fff';
+  });
+}).catch(function(){});
+fetch('/api/stop-info').then(function(r){return r.json();}).then(function(d){
+  stopInfo=d;
+  // Now load stops (after stopInfo is ready)
+  return fetch('/api/stops');
+}).then(function(r){return r.json();}).then(function(d){
+  stopData=d;
+  addStops(d);
+  btn.style.display='block';
+  var cnt=document.getElementById('cnt');
+  if(cnt)cnt.textContent=d.length+' stops';
+}).catch(function(){});
+
+function toggleStops(){
+  stopsVisible=!stopsVisible;
+  if(stopsVisible){
+    map.addLayer(stopLayer);
+    btn.textContent='Hide stops';
+  }else{
+    map.removeLayer(stopLayer);
+    btn.textContent='Show stops';
+  }
+}
+
+function genColor(s){
+  var h=0;
+  for(var i=0;i<s.length;i++)h=((h<<5)-h)+s.charCodeAt(i)|0;
+  return 'hsl('+(Math.abs(h)%360)+',60%,52%)';
+}
+function getStyle(rid){
+  var r=routeColors[rid];
+  return r?{bg:r._bg,fg:r._fg,name:r.route_short_name||rid}:{bg:genColor(rid),fg:'#fff',name:rid};
+}
+function delayInfo(d){
+  d=parseInt(d)||0;
+  return d<=0?{c:'#059669',t:'On time'}:d<=600?{c:'#d97706',t:Math.round(d/60)+' min'}:{c:'#dc2626',t:Math.round(d/60)+' min'};
+}
+
+// Stops
+function addStops(stops){
+  stopLayer.clearLayers();
+  stops.forEach(function(s){
+    var m=L.marker([s.lat,s.lon],{
+      icon:L.divIcon({className:'',html:'<div style="width:7px;height:7px;background:#64748b;border:2px solid white;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.15)"></div>',iconSize:[7,7],iconAnchor:[3.5,3.5]})
+    });
+    var routesAtStop=stopInfo[s.id]||[];
+    var html='<div class="pb"><div class="nm">'+s.name+'</div>';
+    if(routesAtStop.length){
+      routesAtStop.forEach(function(r){
+        var st=getStyle(r.route_id);
+        html+='<div class="rt"><span class="bd" style="background:'+st.bg+';color:'+st.fg+'">'+st.name+'</span>';
+        if(r.next&&r.next.length) html+='<span class="tm">'+r.next[0]+(r.next[1]?','+r.next[1]:'')+'</span>';
+        html+='</div>';
+      });
+    }else{
+      html+='<div style="color:#8e8e93;font-size:.78rem">No scheduled trips</div>';
+    }
+    html+='</div>';
+    m.bindPopup(html);
+    stopLayer.addLayer(m);
+  });
+}
+
+// Bus marker
+function makeIcon(rid,delay){
+  var st=getStyle(rid),di=delayInfo(delay);
+  return L.divIcon({
+    className:'',
+    html:'<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer">'+
+      '<div style="background:'+di.c+';color:#fff;font-size:9px;font-weight:700;font-family:monospace;padding:2px 7px;border-radius:999px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,.25);line-height:1.5;min-width:24px;text-align:center;letter-spacing:.2px">'+st.name+'</div>'+
+      '<div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:5px solid '+di.c+'"></div>'+
+    '</div>',
+    iconSize:[42,30],iconAnchor:[21,30]
+  });
+}
+
+function makePopup(v,di){
+  var st=getStyle(v.rid),kmh=(v.spd*3.6).toFixed(1);
+  return '<div class="pb"><div class="nm">Line '+st.name+'</div>'+
+    '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:.8rem"><span style="color:#8e8e93">Vehicle</span><span style="font-weight:600">'+v.id+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:.8rem;border-top:1px solid #e5e5ea"><span style="color:#8e8e93">Speed</span><span style="font-weight:600">'+kmh+' km/h</span></div>'+
+    '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:.8rem;border-top:1px solid #e5e5ea"><span style="color:#8e8e93">Delay</span><span style="font-weight:700;color:'+di.c+'">'+di.t+'</span></div></div>';
+}
+
+function parseVeh(j){
+  var v=[];
+  (j.Entity||j.Entities||[]).forEach(function(e){
+    var veh=e.Vehicle;
+    if(!veh||!veh.Position)return;
+    v.push({id:e.Id,rid:veh.Trip?.RouteId||'',tid:veh.Trip?.TripId||'',lat:veh.Position.Latitude,lon:veh.Position.Longitude,spd:veh.Position.Speed||0,delay:0});
+  });
+  return v;
+}
+function parseDel(j){
+  var d={};
+  (j.Entity||j.Entities||[]).forEach(function(e){
+    var tu=e.TripUpdate;
+    if(tu&&tu.Trip&&tu.Trip.TripId){
+      var a=(tu.StopTimeUpdate||[]).map(function(s){return s.Arrival&&s.Arrival.Delay?s.Arrival.Delay:null;}).filter(Boolean);
+      d[tu.Trip.TripId]=a.length?Math.max.apply(null,a):0;
+    }
+  });
+  return d;
+}
+
+async function fetchData(){
+  try{
+    var [vD,tD]=await Promise.all([
+      fetch('/api/vehicles').then(function(r){return r.json();}),
+      fetch('/api/trip-updates').then(function(r){return r.json();})
+    ]);
+    var delays=parseDel(tD),vehicles=parseVeh(vD);
+    vehicles.forEach(function(v){v.delay=delays[v.tid]||0;});
+    var ids={};
+    vehicles.forEach(function(v){
+      ids[v.id]=true;
+      var di=delayInfo(v.delay),ll=[v.lat,v.lon];
+      if(markers[v.id]){markers[v.id].setLatLng(ll);markers[v.id].setIcon(makeIcon(v.rid,v.delay));markers[v.id].setPopupContent(makePopup(v,di));}
+      else{markers[v.id]=L.marker(ll,{icon:makeIcon(v.rid,v.delay)}).bindPopup(makePopup(v,di)).addTo(map);}
+    });
+    Object.keys(markers).forEach(function(id){if(!ids[id]){map.removeLayer(markers[id]);delete markers[id];}});
+    document.getElementById('ts').textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    var cnt=document.getElementById('cnt');
+    if(cnt)cnt.textContent=Object.keys(markers).length+' buses';
+  }catch(e){console.error('[AMTAB]',e);}
+}
+fetchData();setInterval(fetchData,10000);
+</script>
+</body>
+</html>
