@@ -578,7 +578,16 @@ http.createServer((req, res) => {
         }));
     }
 
-    const file = path.join(__dirname, url === '/' ? 'index.html' : url);
+    const pathname = new URL(url, 'http://localhost').pathname;
+    const file = path.resolve(__dirname, pathname === '/' ? 'index.html' : pathname.substring(1));
+    const relative = path.relative(__dirname, file);
+    const isSafe = !relative.startsWith('..') && !path.isAbsolute(relative);
+
+    if (!isSafe) {
+        res.writeHead(403);
+        return res.end('Forbidden');
+    }
+
     fs.readFile(file, (err, data) => {
         if (err) { res.writeHead(404); res.end('Not found'); return; }
         const ext = path.extname(file);
