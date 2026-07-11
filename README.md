@@ -1,5 +1,7 @@
 # Bari AMTAB Real-time Bus Map
 
+![Bari AMTAB Map Preview](assets/demo.png)
+
 An interactive, real-time map of AMTAB city buses in Bari, Italy, utilizing official GTFS-Realtime feeds. Replicates the premium visual identity and features of the **Transit App**, including custom dark basemaps, live stops timelines, delay status badges, and advanced direction-aware route path splitting.
 
 ## Features
