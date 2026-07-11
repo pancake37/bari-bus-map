@@ -79,7 +79,7 @@ function extractAll() {
         fs.mkdirSync(outDir);
         execSync(`PowerShell -NoProfile -Command "Expand-Archive -Path '${GTFS_ZIP}' -DestinationPath '${outDir}' -Force"`, { timeout: 30000 });
 
-        function parseCSV(fp, cb) {
+        const parseCSV = (fp, cb) => {
             const p = path.join(outDir, fp);
             if (!fs.existsSync(p)) return;
             const text = fs.readFileSync(p, 'utf8');

@@ -93,7 +93,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-window.onerror = function(message, source, lineno, colno, error) {
+window.onerror = function(message, source, lineno, colno) {
   var div = document.createElement('div');
   div.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(220,38,38,0.9);color:#fff;padding:12px 20px;border-radius:8px;font-size:12px;font-family:monospace;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.3);max-width:90%;overflow-x:auto;';
   div.innerHTML = '<strong>Client-side error:</strong><br>' + message + ' at ' + (source ? source.split('/').pop() : 'unknown') + ':' + lineno + ':' + colno;
@@ -120,7 +120,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,allShapes=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null;
+var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null;
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -434,15 +434,6 @@ function makeIcon(rid,delay){
   });
 }
 
-function makePopup(v,di){
-  var st=getStyle(v.rid),kmh=(v.spd).toFixed(1);
-  return '<div class="pb"><div class="nm">Line '+st.name+'</div>'+
-    '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:.8rem"><span style="color:#8e8e93">Vehicle</span><span style="font-weight:600">'+v.id+'</span></div>'+
-    '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:.8rem;border-top:1px solid #e5e5ea"><span style="color:#8e8e93">Speed</span><span style="font-weight:600">'+kmh+' km/h</span></div>'+
-    '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:.8rem;border-top:1px solid #e5e5ea"><span style="color:#8e8e93">Delay</span><span style="font-weight:700;color:'+di.c+'">'+di.t+'</span></div></div>';
-}
-
-
 async function fetchData(){
   try{
     var [vehicles,delays,etas]=await Promise.all([
@@ -462,7 +453,7 @@ async function fetchData(){
     var ids={};
     vehicles.forEach(function(v){
       ids[v.id]=true;
-      var di=delayInfo(v.delay),ll=[v.lat,v.lon];
+      var ll=[v.lat,v.lon];
       if(markers[v.id]){
         markers[v.id].setLatLng(ll);
         markers[v.id].setIcon(makeIcon(v.rid,v.delay));
