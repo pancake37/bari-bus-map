@@ -27,6 +27,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 #tgl{position:absolute;top:74px;left:16px;z-index:1000;background:#fff;border:1px solid #e5e5ea;border-radius:8px;padding:6px 12px;font-size:.78rem;font-weight:500;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.08);color:#1c1c1e;user-select:none}
 #tgl:hover{background:#f2f2f7}
 #ts{position:absolute;bottom:24px;left:16px;z-index:1000;background:#fff;padding:4px 12px;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.08);font-size:.73rem;font-weight:500;color:#2563eb;border:1px solid #e5e5ea}
+
+/* Sidebar */
+#sp{position:absolute;top:48px;left:0;bottom:0;width:340px;background:#fff;z-index:1001;box-shadow:2px 0 12px rgba(0,0,0,.1);transform:translateX(-100%);transition:transform .25s;display:flex;flex-direction:column}
+#sp.open{transform:translateX(0)}
+#sp .sc{flex:1;overflow-y:auto}
+.sp-h{padding:14px 16px 8px;border-bottom:1px solid #e5e5ea;display:flex;justify-content:space-between;align-items:flex-start}
+.sp-h .nm{font-size:1rem;font-weight:600}
+.sp-h .ad{font-size:.75rem;color:#8e8e93;margin-top:2px}
+.sp-h .cl{background:none;border:none;font-size:1.5rem;color:#8e8e93;cursor:pointer;padding:0 4px;line-height:1}
+.sp-h .cl:hover{color:#1c1c1e}
+.sp-l{display:flex;align-items:center;padding:9px 14px;border-bottom:1px solid #f2f2f7;cursor:pointer}
+.sp-l:hover{background:#f8f8fa}
+.sp-l .ll{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px}
+.sp-l .num{font-size:1.2rem;font-weight:700;line-height:1.3}
+.sp-l .dir{font-size:.78rem;color:#8e8e93;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-l .lr{text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end}
+.sp-l .liv{font-size:.65rem;color:#34d399;font-weight:600;margin-bottom:1px}
+.sp-l .min{font-size:1.4rem;font-weight:700;line-height:1.2}
+@media(max-width:640px){#sp{width:100%}}
+
+/* Route line layer */
+.rl{color:#fff;padding:4px 10px;border-radius:6px;font-size:.75rem;font-weight:600;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -35,6 +57,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <div class="st"><div class="dot"></div><span>live</span></div>
 </div>
 <div id="map"></div>
+<div id="sp">
+  <div class="sp-h">
+    <div><div class="nm"></div><div class="ad"></div></div>
+    <button class="cl">&times;</button>
+  </div>
+  <div class="sc"></div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -56,7 +85,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},stopsVisible=false;
+var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},stopsVisible=false,routeLine=null,routeLabel=null,allShapes=null;
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -69,7 +98,6 @@ fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
 }).catch(function(){});
 fetch('/api/stop-info').then(function(r){return r.json();}).then(function(d){
   stopInfo=d;
-  // Now load stops (after stopInfo is ready)
   return fetch('/api/stops');
 }).then(function(r){return r.json();}).then(function(d){
   stopData=d;
@@ -77,6 +105,12 @@ fetch('/api/stop-info').then(function(r){return r.json();}).then(function(d){
   btn.style.display='block';
   var cnt=document.getElementById('cnt');
   if(cnt)cnt.textContent=d.length+' stops';
+  return fetch('/api/route-shapes');
+}).then(function(r){return r.json();}).then(function(d){
+  routeShapes=d;
+  return fetch('/api/shapes');
+}).then(function(r){return r.json();}).then(function(d){
+  allShapes=d;
 }).catch(function(){});
 
 function toggleStops(){
@@ -104,6 +138,70 @@ function delayInfo(d){
   return d<=0?{c:'#059669',t:'On time'}:d<=600?{c:'#d97706',t:Math.round(d/60)+' min'}:{c:'#dc2626',t:Math.round(d/60)+' min'};
 }
 
+// Sidebar
+var spEl=document.getElementById('sp'),scEl=spEl.querySelector('.sc'),spNm=spEl.querySelector('.sp-h .nm'),spAd=spEl.querySelector('.sp-h .ad');
+spEl.querySelector('.cl').onclick=closeStopPanel;
+L.DomEvent.on(spEl,'click',L.DomEvent.stopPropagation);
+function closeStopPanel(){spEl.classList.remove('open');clearRouteLine();}
+function parseGTFSSecs(s){var p=s.split(':');return(+p[0]||0)*3600+(+p[1]||0)*60+(+p[2]||0);}
+function minsUntil(t){
+  var n=new Date(),ns=n.getHours()*3600+n.getMinutes()*60+n.getSeconds(),ts=parseGTFSSecs(t),d=ts-ns;
+  if(d<0)d+=86400;
+  return Math.round(d/60);
+}
+function openStopPanel(s){
+  spNm.textContent=s.name;
+  spAd.textContent=s.code?s.code:'';
+  var html='',routes=stopInfo[s.id]||[];
+  routes.forEach(function(r){
+    var st=getStyle(r.route_id),mu=minsUntil(r.next[0]);
+    html+='<div class="sp-l" data-route="'+r.route_id+'">'+
+      '<div class="ll"><div class="num" style="color:'+st.bg+'">'+st.name+'</div>'+
+      (r.headsign?'<div class="dir">&rarr; '+r.headsign+'</div>':'')+
+      '</div>'+
+      '<div class="lr">'+
+      (mu>=0?'<div class="liv">&#x1F4F6;</div>':'')+
+      '<div class="min">'+(mu>=0?mu:'&mdash;')+'</div>'+
+      '</div></div>';
+  });
+  if(!html)html='<div style="text-align:center;padding:20px;color:#8e8e93;font-size:.85rem">No scheduled trips &#x1F4CD;</div>';
+  scEl.innerHTML=html;
+  spEl.classList.add('open');
+  // Click route row → draw line
+  scEl.querySelectorAll('.sp-l').forEach(function(el){
+    el.onclick=function(){showRouteLine(el.dataset.route);};
+  });
+  // Pan map to fit sidebar
+  var mapW=map.getSize().x;
+  if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
+  document.getElementById('ts').textContent='';
+}
+
+function clearRouteLine(){
+  if(routeLine){map.removeLayer(routeLine);routeLine=null;}
+  if(routeLabel){map.removeLayer(routeLabel);routeLabel=null;}
+}
+function showRouteLine(rid){
+  clearRouteLine();
+  var shapeIds=routeShapes[rid];
+  if(!shapeIds||!shapeIds.length||!allShapes)return;
+  var sid=shapeIds[0],pts=allShapes[sid];
+  if(!pts||!pts.length)return;
+  var ll=pts.map(function(p){return [p.lat,p.lon];});
+  var st=getStyle(rid);
+  routeLine=L.polyline(ll,{color:st.bg,weight:5,opacity:.8}).addTo(map);
+  var first=ll[0];
+  routeLabel=L.marker(first,{
+    icon:L.divIcon({
+      className:'rl',
+      html:'<span style="background:'+st.bg+';color:'+st.fg+'">'+st.name+'</span>',
+      iconSize:[0,0],iconAnchor:[0,0]
+    })
+  }).addTo(map);
+  map.fitBounds(routeLine.getBounds().pad(0.1));
+  closeStopPanel();
+}
+
 // Stops
 function addStops(stops){
   stopLayer.clearLayers();
@@ -111,23 +209,14 @@ function addStops(stops){
     var m=L.marker([s.lat,s.lon],{
       icon:L.divIcon({className:'',html:'<div style="width:7px;height:7px;background:#64748b;border:2px solid white;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.15)"></div>',iconSize:[7,7],iconAnchor:[3.5,3.5]})
     });
-    var routesAtStop=stopInfo[s.id]||[];
-    var html='<div class="pb"><div class="nm">'+s.name+'</div>';
-    if(routesAtStop.length){
-      routesAtStop.forEach(function(r){
-        var st=getStyle(r.route_id);
-        html+='<div class="rt"><span class="bd" style="background:'+st.bg+';color:'+st.fg+'">'+st.name+'</span>';
-        if(r.next&&r.next.length) html+='<span class="tm">'+r.next[0]+(r.next[1]?','+r.next[1]:'')+'</span>';
-        html+='</div>';
-      });
-    }else{
-      html+='<div style="color:#8e8e93;font-size:.78rem">No scheduled trips</div>';
-    }
-    html+='</div>';
-    m.bindPopup(html);
+    m.on('click',function(e){L.DomEvent.stopPropagation(e);openStopPanel(s);});
     stopLayer.addLayer(m);
   });
 }
+
+// Close sidebar on map click or Escape
+map.on('click',closeStopPanel);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeStopPanel();});
 
 // Bus marker
 function makeIcon(rid,delay){

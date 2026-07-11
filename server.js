@@ -16,13 +16,14 @@ const MIME = {
     '.json': 'application/json'
 };
 
-let gtfsData = { routes: {}, stops: [], shapes: {}, stopInfo: {} };
+let gtfsData = { routes: {}, stops: [], shapes: {}, stopInfo: {}, routeShapes: {} };
 
 function loadCache() {
     if (fs.existsSync(CACHE)) {
         try {
             gtfsData = JSON.parse(fs.readFileSync(CACHE, 'utf8'));
             gtfsData.stopInfo = gtfsData.stopInfo || {};
+            gtfsData.routeShapes = gtfsData.routeShapes || {};
             console.log('  GTFS cache loaded: ' + Object.keys(gtfsData.routes).length + ' routes, ' +
                 gtfsData.stops.length + ' stops, ' + Object.keys(gtfsData.shapes).length + ' shapes\n');
             return true;
@@ -67,7 +68,7 @@ function extractAll() {
         const tripRoutes = {};
         parseCSV('trips.txt', t => {
             if (t.trip_id && t.route_id) {
-                tripRoutes[t.trip_id] = { route_id: t.route_id, headsign: t.trip_headsign || '', direction: t.direction_id || '' };
+                tripRoutes[t.trip_id] = { route_id: t.route_id, headsign: t.trip_headsign || '', direction: t.direction_id || '', shape_id: t.shape_id || '' };
             }
         });
 
@@ -104,6 +105,18 @@ function extractAll() {
                 delete byRoute[rid].arrivals;
             });
             gtfsData.stopInfo[sid] = Object.values(byRoute);
+        });
+
+        // Route→Shapes mapping (deduplicated)
+        gtfsData.routeShapes = {};
+        Object.keys(tripRoutes).forEach(tid => {
+            const t = tripRoutes[tid];
+            if (t.shape_id) {
+                if (!gtfsData.routeShapes[t.route_id]) gtfsData.routeShapes[t.route_id] = [];
+                if (gtfsData.routeShapes[t.route_id].indexOf(t.shape_id) === -1) {
+                    gtfsData.routeShapes[t.route_id].push(t.shape_id);
+                }
+            }
         });
 
         // Stops
@@ -170,6 +183,10 @@ http.createServer((req, res) => {
     if (req.url === '/api/stop-info') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
         return res.end(JSON.stringify(gtfsData.stopInfo));
+    }
+    if (req.url === '/api/route-shapes') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
+        return res.end(JSON.stringify(gtfsData.routeShapes));
     }
 
     const file = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
