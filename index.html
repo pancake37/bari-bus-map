@@ -85,7 +85,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},stopsVisible=false,routeLine=null,routeLabel=null,allShapes=null,lastVehicles=[],spStop=null;
+var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},stopsVisible=false,routeLine=null,routeLabel=null,allShapes=null,lastVehicles=[],etasCache={},spStop=null;
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -143,7 +143,6 @@ var spEl=document.getElementById('sp'),scEl=spEl.querySelector('.sc'),spNm=spEl.
 spEl.querySelector('.cl').onclick=closeStopPanel;
 L.DomEvent.on(spEl,'click',L.DomEvent.stopPropagation);
 function closeStopPanel(){spEl.classList.remove('open');clearRouteLine();}
-function haversineDist(lat1,lon1,lat2,lon2){var R=6371,dLat=(lat2-lat1)*Math.PI/180,dLon=(lon2-lon1)*Math.PI/180,a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
 function openStopPanel(s){
   clearRouteLine();
   spStop=s;renderStopPanel();
@@ -156,15 +155,9 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
   var s=spStop;
   spNm.textContent=s.name;
   spAd.textContent=s.code?s.code:'';
-  var html='',routes=stopInfo[s.id]||[];
-  var byRoute={};
-  lastVehicles.forEach(function(v){if(!byRoute[v.rid])byRoute[v.rid]=[];byRoute[v.rid].push(v);});
+  var html='',routes=stopInfo[s.id]||[],etas=etasCache[s.id]||{};
   routes.forEach(function(r){
-    var st=getStyle(r.route_id),best=null,rv=byRoute[r.route_id]||[];
-    rv.forEach(function(v){
-      var dist=haversineDist(s.lat,s.lon,v.lat,v.lon)*1.5,spd=v.spd*3.6||15,eta=Math.round(dist/spd*60);
-      if(eta<120&&(!best||eta<best.eta))best={eta:eta,delay:v.delay};
-    });
+    var st=getStyle(r.route_id),best=etas[r.route_id];
     var disp='&mdash;',delayStr='';
     if(best){
       disp=best.eta;
@@ -247,36 +240,17 @@ function makePopup(v,di){
     '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:.8rem;border-top:1px solid #e5e5ea"><span style="color:#8e8e93">Delay</span><span style="font-weight:700;color:'+di.c+'">'+di.t+'</span></div></div>';
 }
 
-function parseVeh(j){
-  var v=[];
-  (j.Entity||j.Entities||[]).forEach(function(e){
-    var veh=e.Vehicle;
-    if(!veh||!veh.Position)return;
-    v.push({id:e.Id,rid:veh.Trip?.RouteId||'',tid:veh.Trip?.TripId||'',lat:veh.Position.Latitude,lon:veh.Position.Longitude,spd:veh.Position.Speed||0,delay:0});
-  });
-  return v;
-}
-function parseDel(j){
-  var d={};
-  (j.Entity||j.Entities||[]).forEach(function(e){
-    var tu=e.TripUpdate;
-    if(tu&&tu.Trip&&tu.Trip.TripId){
-      var a=(tu.StopTimeUpdate||[]).map(function(s){return s.Arrival&&s.Arrival.Delay?s.Arrival.Delay:null;}).filter(Boolean);
-      d[tu.Trip.TripId]=a.length?Math.max.apply(null,a):0;
-    }
-  });
-  return d;
-}
 
 async function fetchData(){
   try{
-    var [vD,tD]=await Promise.all([
+    var [vehicles,delays,etas]=await Promise.all([
       fetch('/api/vehicles').then(function(r){return r.json();}),
-      fetch('/api/trip-updates').then(function(r){return r.json();})
+      fetch('/api/trip-updates').then(function(r){return r.json();}),
+      fetch('/api/etas').then(function(r){return r.json();})
     ]);
-    var delays=parseDel(tD),vehicles=parseVeh(vD);
     vehicles.forEach(function(v){v.delay=delays[v.tid]||0;});
     lastVehicles=vehicles;
+    etasCache=etas;
     renderStopPanel();
     var ids={};
     vehicles.forEach(function(v){
