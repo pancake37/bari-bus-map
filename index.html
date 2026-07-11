@@ -150,6 +150,7 @@ function minsUntil(t){
   return Math.round(d/60);
 }
 function openStopPanel(s){
+  clearRouteLine();
   spNm.textContent=s.name;
   spAd.textContent=s.code?s.code:'';
   var html='',routes=stopInfo[s.id]||[];
