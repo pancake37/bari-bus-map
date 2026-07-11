@@ -85,7 +85,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},stopsVisible=false,routeLine=null,routeLabel=null,allShapes=null;
+var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},stopsVisible=false,routeLine=null,routeLabel=null,allShapes=null,lastVehicles=[];
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -143,40 +143,39 @@ var spEl=document.getElementById('sp'),scEl=spEl.querySelector('.sc'),spNm=spEl.
 spEl.querySelector('.cl').onclick=closeStopPanel;
 L.DomEvent.on(spEl,'click',L.DomEvent.stopPropagation);
 function closeStopPanel(){spEl.classList.remove('open');clearRouteLine();}
-function parseGTFSSecs(s){var p=s.split(':');return(+p[0]||0)*3600+(+p[1]||0)*60+(+p[2]||0);}
-function minsUntil(t){
-  var n=new Date(),ns=n.getHours()*3600+n.getMinutes()*60+n.getSeconds(),ts=parseGTFSSecs(t),d=ts-ns;
-  if(d<0)d+=86400;
-  return Math.round(d/60);
-}
+function haversineDist(lat1,lon1,lat2,lon2){var R=6371,dLat=(lat2-lat1)*Math.PI/180,dLon=(lon2-lon1)*Math.PI/180,a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
 function openStopPanel(s){
   clearRouteLine();
   spNm.textContent=s.name;
   spAd.textContent=s.code?s.code:'';
   var html='',routes=stopInfo[s.id]||[];
+  var byRoute={};
+  lastVehicles.forEach(function(v){if(!byRoute[v.rid])byRoute[v.rid]=[];byRoute[v.rid].push(v);});
   routes.forEach(function(r){
-    var st=getStyle(r.route_id),at=r.next[0],mu=at?minsUntil(at):-1;
-    var disp,isLive=false;
-    if(mu>=0&&mu<=180){disp=mu;isLive=true;}
-    else if(at){disp=at.substring(0,5);}
-    else{disp='&mdash;';}
+    var st=getStyle(r.route_id),best=null,rv=byRoute[r.route_id]||[];
+    rv.forEach(function(v){
+      var dist=haversineDist(s.lat,s.lon,v.lat,v.lon),spd=v.spd*3.6||20,eta=Math.round(dist/spd*60);
+      if(eta<120&&(!best||eta<best.eta))best={eta:eta,delay:v.delay};
+    });
+    var disp='&mdash;',delayStr='';
+    if(best){
+      disp=best.eta;
+      if(best.delay>60)delayStr='<div style="font-size:.65rem;color:#dc2626;margin-top:1px">'+Math.round(best.delay/60)+'\' ritardo</div>';
+      else if(best.delay<-60)delayStr='<div style="font-size:.65rem;color:#059669;margin-top:1px">'+Math.round(-best.delay/60)+'\' anticipo</div>';
+    }
     html+='<div class="sp-l" data-route="'+r.route_id+'">'+
       '<div class="ll"><div class="num" style="color:'+st.bg+'">'+st.name+'</div>'+
       (r.headsign?'<div class="dir">&rarr; '+r.headsign+'</div>':'')+
       '</div>'+
       '<div class="lr">'+
-      (isLive?'<div class="liv">&#x1F4F6;</div>':'')+
-      '<div class="min" style="color:'+(isLive?'#1c1c1e':'#8e8e93')+'">'+disp+'</div>'+
+      (best?'<div class="liv">&#x1F4F6;</div>':'')+
+      '<div class="min">'+disp+'</div>'+delayStr+
       '</div></div>';
   });
-  if(!html)html='<div style="text-align:center;padding:20px;color:#8e8e93;font-size:.85rem">No scheduled trips &#x1F4CD;</div>';
+  if(!html)html='<div style="text-align:center;padding:20px;color:#8e8e93;font-size:.85rem">No buses nearby</div>';
   scEl.innerHTML=html;
   spEl.classList.add('open');
-  // Click route row → draw line
-  scEl.querySelectorAll('.sp-l').forEach(function(el){
-    el.onclick=function(){showRouteLine(el.dataset.route);};
-  });
-  // Pan map to fit sidebar
+  scEl.querySelectorAll('.sp-l').forEach(function(el){el.onclick=function(){showRouteLine(el.dataset.route);};});
   var mapW=map.getSize().x;
   if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
   document.getElementById('ts').textContent='';
@@ -273,6 +272,7 @@ async function fetchData(){
     ]);
     var delays=parseDel(tD),vehicles=parseVeh(vD);
     vehicles.forEach(function(v){v.delay=delays[v.tid]||0;});
+    lastVehicles=vehicles;
     var ids={};
     vehicles.forEach(function(v){
       ids[v.id]=true;
