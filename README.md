@@ -2,12 +2,11 @@
 
 ![Bari AMTAB Map Preview](assets/demo.png)
 
-An interactive, real-time map of AMTAB city buses in Bari, Italy, utilizing official GTFS-Realtime feeds. Replicates the premium visual identity and features of the **Transit App**, including custom dark basemaps, live stops timelines, delay status badges, and advanced direction-aware route path splitting.
+An interactive, real-time map of AMTAB city buses in Bari, Italy, utilizing official GTFS-Realtime feeds.
 
 ## Features
 
 - **Advanced Travel Time Prediction**: Computes downstream stop ETAs in real-time using a segment-based travel speed model. It weights the bus's instantaneous speed near stops and uses historical averages (adjusted for rush-hour traffic and deceleration zones) for downstream segments.
-- **Transit App UI styling**: Elegant dark interface with large, bold, route-colored typography, real-time tracking badges (`📶`), and live timelines.
 - **Live Stop Timeline**: Clicking any vehicle marker on the map displays its ordered timeline of stops, greying out passed stops and highlighting upcoming ones with real-time ETAs.
 - **Direction-Aware Split Route Paths**: Selecting a route draws a custom path showing exactly where the bus has been (thin, faded line) versus where it is going (thick, high-contrast line), aligned to the vehicle's active trip direction.
 - **Minimalist Dark Map**: Powered by CartoDB Dark Matter tiles, removing POIs and distracting labels to focus entirely on roads, stops, and vehicles.
