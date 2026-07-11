@@ -155,14 +155,18 @@ function openStopPanel(s){
   spAd.textContent=s.code?s.code:'';
   var html='',routes=stopInfo[s.id]||[];
   routes.forEach(function(r){
-    var st=getStyle(r.route_id),mu=minsUntil(r.next[0]);
+    var st=getStyle(r.route_id),at=r.next[0],mu=at?minsUntil(at):-1;
+    var disp,isLive=false;
+    if(mu>=0&&mu<=180){disp=mu;isLive=true;}
+    else if(at){disp=at.substring(0,5);}
+    else{disp='&mdash;';}
     html+='<div class="sp-l" data-route="'+r.route_id+'">'+
       '<div class="ll"><div class="num" style="color:'+st.bg+'">'+st.name+'</div>'+
       (r.headsign?'<div class="dir">&rarr; '+r.headsign+'</div>':'')+
       '</div>'+
       '<div class="lr">'+
-      (mu>=0?'<div class="liv">&#x1F4F6;</div>':'')+
-      '<div class="min">'+(mu>=0?mu:'&mdash;')+'</div>'+
+      (isLive?'<div class="liv">&#x1F4F6;</div>':'')+
+      '<div class="min" style="color:'+(isLive?'#1c1c1e':'#8e8e93')+'">'+disp+'</div>'+
       '</div></div>';
   });
   if(!html)html='<div style="text-align:center;padding:20px;color:#8e8e93;font-size:.85rem">No scheduled trips &#x1F4CD;</div>';
