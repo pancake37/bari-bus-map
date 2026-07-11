@@ -85,7 +85,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},stopsVisible=false,routeLine=null,routeLabel=null,allShapes=null,lastVehicles=[];
+var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},stopsVisible=false,routeLine=null,routeLabel=null,allShapes=null,lastVehicles=[],spStop=null;
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -146,6 +146,14 @@ function closeStopPanel(){spEl.classList.remove('open');clearRouteLine();}
 function haversineDist(lat1,lon1,lat2,lon2){var R=6371,dLat=(lat2-lat1)*Math.PI/180,dLon=(lon2-lon1)*Math.PI/180,a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
 function openStopPanel(s){
   clearRouteLine();
+  spStop=s;renderStopPanel();
+  spEl.classList.add('open');
+  var mapW=map.getSize().x;
+  if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
+  document.getElementById('ts').textContent='';
+}
+function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
+  var s=spStop;
   spNm.textContent=s.name;
   spAd.textContent=s.code?s.code:'';
   var html='',routes=stopInfo[s.id]||[];
@@ -154,7 +162,7 @@ function openStopPanel(s){
   routes.forEach(function(r){
     var st=getStyle(r.route_id),best=null,rv=byRoute[r.route_id]||[];
     rv.forEach(function(v){
-      var dist=haversineDist(s.lat,s.lon,v.lat,v.lon),spd=v.spd*3.6||20,eta=Math.round(dist/spd*60);
+      var dist=haversineDist(s.lat,s.lon,v.lat,v.lon)*1.5,spd=v.spd*3.6||15,eta=Math.round(dist/spd*60);
       if(eta<120&&(!best||eta<best.eta))best={eta:eta,delay:v.delay};
     });
     var disp='&mdash;',delayStr='';
@@ -174,11 +182,7 @@ function openStopPanel(s){
   });
   if(!html)html='<div style="text-align:center;padding:20px;color:#8e8e93;font-size:.85rem">No buses nearby</div>';
   scEl.innerHTML=html;
-  spEl.classList.add('open');
   scEl.querySelectorAll('.sp-l').forEach(function(el){el.onclick=function(){showRouteLine(el.dataset.route);};});
-  var mapW=map.getSize().x;
-  if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
-  document.getElementById('ts').textContent='';
 }
 
 function clearRouteLine(){
@@ -273,6 +277,7 @@ async function fetchData(){
     var delays=parseDel(tD),vehicles=parseVeh(vD);
     vehicles.forEach(function(v){v.delay=delays[v.tid]||0;});
     lastVehicles=vehicles;
+    renderStopPanel();
     var ids={};
     vehicles.forEach(function(v){
       ids[v.id]=true;
