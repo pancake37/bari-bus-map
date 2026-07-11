@@ -1,4 +1,4 @@
 .gtfs-cache.json
 *.pdf
-data/observations-*.jsonl
+data/
 node_modules/
