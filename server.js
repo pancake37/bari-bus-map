@@ -398,7 +398,10 @@ function pollRealtime() {
                     id: e.Id, rid, tid,
                     lat: veh.Position.Latitude, lon: veh.Position.Longitude,
                     spd: veh.Position.Speed || 0,
-                    shapeId
+                    shapeId,
+                    stopId: veh.StopId || null,
+                    currentStopSequence: veh.CurrentStopSequence || null,
+                    currentStatus: veh.CurrentStatus !== undefined ? veh.CurrentStatus : null
                 });
             });
             vehiclesCache = vehicles;
@@ -440,11 +443,27 @@ function computeETAs() {
         const seq = gtfsData.stopSequence[shapeId] || [];
         let nextStopId = null;
         let nextStopIdx = -1;
-        for (let i = 0; i < seq.length; i++) {
-            if (vehCum < stops[seq[i]]) {
-                nextStopId = seq[i];
-                nextStopIdx = i;
-                break;
+
+        if (v.stopId && seq.indexOf(v.stopId) !== -1) {
+            const stopIdx = seq.indexOf(v.stopId);
+            if (v.currentStatus === 1) { // STOPPED_AT
+                if (stopIdx + 1 < seq.length) {
+                    nextStopId = seq[stopIdx + 1];
+                    nextStopIdx = stopIdx + 1;
+                }
+            } else { // IN_TRANSIT_TO (0) or INCOMING_AT (2)
+                nextStopId = v.stopId;
+                nextStopIdx = stopIdx;
+            }
+        }
+
+        if (!nextStopId) {
+            for (let i = 0; i < seq.length; i++) {
+                if (vehCum < stops[seq[i]]) {
+                    nextStopId = seq[i];
+                    nextStopIdx = i;
+                    break;
+                }
             }
         }
 
@@ -521,33 +540,34 @@ function initRealtime() {
 // ── Server ───────────────────────────────────────────────────────────────────
 
 http.createServer((req, res) => {
-    const jHead = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' };
+    const staticHead = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' };
+    const dynamicHead = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' };
     const url = req.url;
 
     if (url === '/api/vehicles') {
-        res.writeHead(200, jHead);
+        res.writeHead(200, dynamicHead);
         return res.end(JSON.stringify(vehiclesCache));
     }
     if (url === '/api/trip-updates') {
-        res.writeHead(200, jHead);
+        res.writeHead(200, dynamicHead);
         return res.end(JSON.stringify(delaysCache));
     }
     if (url === '/api/etas') {
-        res.writeHead(200, jHead);
+        res.writeHead(200, dynamicHead);
         return res.end(JSON.stringify(etasCache));
     }
     if (url === '/api/routes') {
-        res.writeHead(200, jHead);
+        res.writeHead(200, staticHead);
         return res.end(JSON.stringify(gtfsData.routes));
     }
     if (url === '/api/stops') {
-        res.writeHead(200, jHead);
+        res.writeHead(200, staticHead);
         return res.end(JSON.stringify(gtfsData.stops));
     }
     if (url.startsWith('/api/shapes')) {
         const u = new URL(url, 'http://localhost');
         const id = u.searchParams.get('id');
-        res.writeHead(200, jHead);
+        res.writeHead(200, staticHead);
         if (id) {
             const sh = gtfsData.shapes[id];
             return res.end(JSON.stringify(sh || []));
@@ -556,19 +576,19 @@ http.createServer((req, res) => {
         }
     }
     if (url === '/api/stop-info') {
-        res.writeHead(200, jHead);
+        res.writeHead(200, staticHead);
         return res.end(JSON.stringify(gtfsData.stopInfo));
     }
     if (url === '/api/route-shapes') {
-        res.writeHead(200, jHead);
+        res.writeHead(200, staticHead);
         return res.end(JSON.stringify(gtfsData.routeShapes));
     }
     if (url === '/api/shape-stops') {
-        res.writeHead(200, jHead);
+        res.writeHead(200, staticHead);
         return res.end(JSON.stringify(gtfsData.stopSequence));
     }
     if (url === '/api/stats') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, dynamicHead);
         return res.end(JSON.stringify({
             vehicles: vehiclesCache.length,
             etasStops: Object.keys(etasCache).length,
@@ -599,4 +619,11 @@ http.createServer((req, res) => {
     console.log('  Open: http://localhost:' + PORT + '\n');
     if (!loadCache()) extractAll();
     initRealtime();
+});
+
+process.on('uncaughtException', err => {
+    console.error('[AMTAB Server] Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[AMTAB Server] Unhandled Rejection at:', promise, 'reason:', reason);
 });

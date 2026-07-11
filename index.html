@@ -51,8 +51,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .sp-l .eta-container{display:flex;align-items:flex-start}
 .sp-l .min-val{font-size:2.2rem;font-weight:800;line-height:1}
 .sp-l .rt-icon{font-size:.75rem;margin-top:1px;margin-left:2px}
+.sp-l .rt-live{animation:pulse-rt 1.5s infinite;display:inline-block}
+@keyframes pulse-rt{
+  0%,100%{opacity:1;transform:scale(1)}
+  50%{opacity:.5;transform:scale(1.15)}
+}
 .sp-l .eta-unit{font-size:.7rem;color:#71717a;margin-top:1px;text-transform:uppercase;letter-spacing:.5px;font-weight:700}
-@media(max-width:640px){#sp{width:100%}}
+@media(max-width:640px){
+  #sp{
+    width:100%;
+    top:auto;
+    bottom:0;
+    height:50vh;
+    border-radius:16px 16px 0 0;
+    transform:translateY(100%);
+    box-shadow:0 -4px 24px rgba(0,0,0,0.3);
+  }
+  #sp.open{transform:translateY(0)}
+}
 
 /* Route line layer */
 /* Route line layer */
@@ -120,7 +136,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null;
+var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null;
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -136,7 +152,7 @@ fetch('/api/stop-info').then(function(r){return r.json();}).then(function(d){
   return fetch('/api/stops');
 }).then(function(r){return r.json();}).then(function(d){
   stopData=d;
-  addStops(d);
+  updateMarkerVisibilities();
   btn.style.display='block';
   var cnt=document.getElementById('cnt');
   if(cnt)cnt.textContent=d.length+' stops';
@@ -151,12 +167,11 @@ fetch('/api/stop-info').then(function(r){return r.json();}).then(function(d){
 function toggleStops(){
   stopsVisible=!stopsVisible;
   if(stopsVisible){
-    map.addLayer(stopLayer);
     btn.textContent='Hide stops';
   }else{
-    map.removeLayer(stopLayer);
     btn.textContent='Show stops';
   }
+  updateMarkerVisibilities();
 }
 
 function genColor(s){
@@ -177,7 +192,13 @@ function delayInfo(d){
 var spEl=document.getElementById('sp'),scEl=spEl.querySelector('.sc'),spNm=spEl.querySelector('.sp-h .nm'),spAd=spEl.querySelector('.sp-h .ad');
 spEl.querySelector('.cl').onclick=closeStopPanel;
 L.DomEvent.on(spEl,'click',L.DomEvent.stopPropagation);
-function closeStopPanel(){spEl.classList.remove('open');spStop=null;spVehicle=null;clearRouteLine();}
+function closeStopPanel(){
+  spEl.classList.remove('open');
+  spStop=null;
+  spVehicle=null;
+  clearRouteLine();
+  updateMarkerVisibilities();
+}
 function openStopPanel(s){
   clearRouteLine();
   spVehicle=null;
@@ -186,6 +207,7 @@ function openStopPanel(s){
   var mapW=map.getSize().x;
   if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
   document.getElementById('ts').textContent='';
+  updateMarkerVisibilities();
 }
 function openVehiclePanel(v){
   clearRouteLine();
@@ -197,6 +219,7 @@ function openVehiclePanel(v){
   if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
   document.getElementById('ts').textContent='';
   showRouteLine(v.rid, v.id);
+  updateMarkerVisibilities();
 }
 function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))return;
   var v=spVehicle;
@@ -254,12 +277,19 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
           return closestStopIdx;
         });
 
+        var targetIdx = seq.indexOf(v.stopId);
+
         seq.forEach(function(stopId, idx){
           var s = stopMap[stopId];
           if(!s) return;
           
-          var stopIdx = stopIndices[idx];
-          var isPassed = stopIdx < closestIdx;
+          var isPassed;
+          if (targetIdx !== -1) {
+            isPassed = idx < targetIdx;
+          } else {
+            var stopIdx = stopIndices[idx];
+            isPassed = stopIdx < closestIdx;
+          }
           
           var etaText = '&mdash;';
           var etaInfo = etasCache[stopId] && etasCache[stopId][v.rid];
@@ -306,24 +336,24 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
     if(best){
       disp=best.eta;
       vid=best.vid;
-      if(best.delay>60)delayStr='<div style="font-size:.65rem;color:#ef4444;margin-top:1px;font-weight:600">'+Math.round(best.delay/60)+'\' ritardo</div>';
-      else if(best.delay<-60)delayStr='<div style="font-size:.65rem;color:#10b981;margin-top:1px;font-weight:600">'+Math.round(-best.delay/60)+'\' anticipo</div>';
+      if(best.delay>60)delayStr='<div style="font-size:.65rem;background:rgba(239,68,68,0.25);color:#fff;margin-top:4px;font-weight:700;padding:2px 6px;border-radius:4px;border:1px solid rgba(239,68,68,0.4)">'+Math.round(best.delay/60)+'\' RITARDO</div>';
+      else if(best.delay<-60)delayStr='<div style="font-size:.65rem;background:rgba(16,185,129,0.25);color:#fff;margin-top:4px;font-weight:700;padding:2px 6px;border-radius:4px;border:1px solid rgba(16,185,129,0.4)">'+Math.round(-best.delay/60)+'\' ANTICIPO</div>';
     }
-    html+='<div class="sp-l" data-route="'+r.route_id+'" data-vid="'+vid+'">'+
+    html+='<div class="sp-l" data-route="'+r.route_id+'" data-vid="'+vid+'" style="background:'+st.bg+';color:'+st.fg+'">'+
       '<div class="ll">'+
-      '<div class="num" style="color:'+st.bg+'">'+st.name+'</div>'+
-      '<div class="dir-row">'+
-      '<span class="arr" style="color:'+st.bg+'">➔</span>'+
-      (r.headsign?'<span class="dest">'+r.headsign+'</span>':'<span class="dest">Line '+st.name+'</span>')+
+      '<div class="num" style="color:'+st.fg+'">'+st.name+'</div>'+
+      '<div class="dir-row" style="color:'+st.fg+'">'+
+      '<span class="arr" style="color:'+st.fg+'">➔</span>'+
+      (r.headsign?'<span class="dest" style="color:'+st.fg+'">'+r.headsign+'</span>':'<span class="dest" style="color:'+st.fg+'">Line '+st.name+'</span>')+
       '</div>'+
-      '<div class="stop-sub">'+s.name+'</div>'+
+      '<div class="stop-sub" style="color:rgba(255,255,255,0.75)">'+s.name+'</div>'+
       '</div>'+
       '<div class="lr">'+
       '<div class="eta-container">'+
-      '<span class="min-val" style="color:'+st.bg+'">'+disp+'</span>'+
-      (best?'<span class="rt-icon" style="color:'+st.bg+'">📶</span>':'')+
+      '<span class="min-val" style="color:'+st.fg+'">'+disp+'</span>'+
+      (best?'<span class="rt-icon rt-live" style="color:'+st.fg+'">📶</span>':'')+
       '</div>'+
-      '<div class="eta-unit">minuti</div>'+
+      '<div class="eta-unit" style="color:rgba(255,255,255,0.75)">minuti</div>'+
       delayStr+
       '</div></div>';
   });
@@ -405,15 +435,81 @@ function showRouteLine(rid, vid){
   closeStopPanel();
 }
 
-// Stops
-function addStops(stops){
-  stopLayer.clearLayers();
-  stops.forEach(function(s){
-    var m=L.marker([s.lat,s.lon],{
-      icon:L.divIcon({className:'',html:'<div style="width:7px;height:7px;background:#64748b;border:2px solid white;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.15)"></div>',iconSize:[7,7],iconAnchor:[3.5,3.5]})
-    });
-    m.on('click',function(e){L.DomEvent.stopPropagation(e);openStopPanel(s);});
-    stopLayer.addLayer(m);
+function updateMarkerVisibilities() {
+  var currentState = "closed_hidden";
+  if (spStop) {
+    currentState = "stop_" + spStop.id;
+  } else if (spVehicle) {
+    currentState = "vehicle_" + spVehicle.id;
+  } else if (stopsVisible) {
+    currentState = "closed_visible";
+  }
+
+  if (currentState !== lastStopsState) {
+    lastStopsState = currentState;
+    stopLayer.clearLayers();
+    
+    if (spStop) {
+      var s = spStop;
+      var m = L.marker([s.lat, s.lon], {
+        icon: L.divIcon({className: '', html: '<div style="width:10px;height:10px;background:#3b82f6;border:2.5px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.3)"></div>', iconSize: [10, 10], iconAnchor: [5, 5]})
+      });
+      m.on('click', function(e) { L.DomEvent.stopPropagation(e); openStopPanel(s); });
+      stopLayer.addLayer(m);
+    } else if (spVehicle) {
+      var sid = spVehicle.shapeId || (routeShapes[spVehicle.rid] && routeShapes[spVehicle.rid][0]);
+      var seq = sid ? (shapeStops[sid] || []) : [];
+      var stopMap = {};
+      stopData.forEach(function(st) { stopMap[st.id] = st; });
+      
+      seq.forEach(function(stopId) {
+        var s = stopMap[stopId];
+        if (!s) return;
+        var m = L.marker([s.lat, s.lon], {
+          icon: L.divIcon({className: '', html: '<div style="width:7px;height:7px;background:#64748b;border:2px solid white;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.15)"></div>', iconSize: [7, 7], iconAnchor: [3.5, 3.5]})
+        });
+        m.on('click', function(e) { L.DomEvent.stopPropagation(e); openStopPanel(s); });
+        stopLayer.addLayer(m);
+      });
+    } else {
+      if (stopsVisible) {
+        stopData.forEach(function(s) {
+          var m = L.marker([s.lat, s.lon], {
+            icon: L.divIcon({className: '', html: '<div style="width:7px;height:7px;background:#64748b;border:2px solid white;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.15)"></div>', iconSize: [7, 7], iconAnchor: [3.5, 3.5]})
+          });
+          m.on('click', function(e) { L.DomEvent.stopPropagation(e); openStopPanel(s); });
+          stopLayer.addLayer(m);
+        });
+      }
+    }
+  }
+
+  // Update vehicle visibility
+  Object.keys(markers).forEach(function(id) {
+    var m = markers[id];
+    var v = lastVehicles.find(function(veh) { return String(veh.id) === String(id); });
+    if (!v) {
+      map.removeLayer(m);
+      return;
+    }
+    
+    var shouldShow = false;
+    if (spStop) {
+      var etas = etasCache[spStop.id] || {};
+      shouldShow = Object.values(etas).some(function(etaInfo) {
+        return String(etaInfo.vid) === String(v.id);
+      });
+    } else if (spVehicle) {
+      shouldShow = String(v.id) === String(spVehicle.id);
+    } else {
+      shouldShow = true;
+    }
+
+    if (shouldShow) {
+      if (!map.hasLayer(m)) map.addLayer(m);
+    } else {
+      if (map.hasLayer(m)) map.removeLayer(m);
+    }
   });
 }
 
@@ -458,7 +554,7 @@ async function fetchData(){
         markers[v.id].setLatLng(ll);
         markers[v.id].setIcon(makeIcon(v.rid,v.delay));
       } else {
-        markers[v.id]=L.marker(ll,{icon:makeIcon(v.rid,v.delay)}).addTo(map);
+        markers[v.id]=L.marker(ll,{icon:makeIcon(v.rid,v.delay)});
         markers[v.id].on('click', function(e){
           L.DomEvent.stopPropagation(e);
           openVehiclePanel(v);
@@ -466,6 +562,7 @@ async function fetchData(){
       }
     });
     Object.keys(markers).forEach(function(id){if(!ids[id]){map.removeLayer(markers[id]);delete markers[id];}});
+    updateMarkerVisibilities();
     document.getElementById('ts').textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     var cnt=document.getElementById('cnt');
     if(cnt)cnt.textContent=Object.keys(markers).length+' buses';
