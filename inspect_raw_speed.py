@@ -15,7 +15,7 @@ try:
                 pos = veh["Position"]
                 speed = pos.get("Speed")
                 if speed is not None and speed > 0:
-                    print(f"Vehicle {e.get('Id')}: Speed = {speed}, Lat = {pos.get('Latitude')}, Lon = {pos.get('Longitude')}")
+                    print(f"Vehicle {e.get('Id')}: Speed = {speed}")
                     count += 1
                     if count >= 10:
                         break
