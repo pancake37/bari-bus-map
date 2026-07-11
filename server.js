@@ -16,7 +16,7 @@ const AMTAB_TRIP = 'https://avl.amtab.it/WSExportGTFS_RT/api/gtfs/TripUpdates';
 
 const RUSH_START = 6, RUSH_END = 10, RUSH_START2 = 15, RUSH_END2 = 19;
 const FAR_THRESHOLD_M = 250;
-const DEFAULT_SPEED = 20;
+const DEFAULT_SPEED = 22;
 const RUSH_FACTOR = 0.85;
 const ETA_MAX_MIN = 120;
 
@@ -27,7 +27,19 @@ const MIME = {
     '.json': 'application/json'
 };
 
-let gtfsData = { routes: {}, stops: [], shapes: {}, stopInfo: {}, routeShapes: {}, graphs: {}, stopRoutePos: {}, stopSequence: {} };
+let gtfsData = {
+    routes: {},
+    stops: [],
+    shapes: {},
+    stopInfo: {},
+    routeShapes: {},
+    tripShapes: {},
+    tripDirections: {},
+    shapeStops: {},
+    graphs: {},
+    stopRoutePos: {},
+    stopSequence: {}
+};
 let vehiclesCache = [], delaysCache = {}, etasCache = {};
 let histSpeed = {}, obsBuffer = [], obsCount = 0, logStream = null, logDate = '';
 
@@ -39,9 +51,16 @@ function loadCache() {
             gtfsData = JSON.parse(fs.readFileSync(CACHE, 'utf8'));
             gtfsData.stopInfo = gtfsData.stopInfo || {};
             gtfsData.routeShapes = gtfsData.routeShapes || {};
+            gtfsData.tripShapes = gtfsData.tripShapes || {};
+            gtfsData.tripDirections = gtfsData.tripDirections || {};
+            gtfsData.shapeStops = gtfsData.shapeStops || {};
+            if (!gtfsData.shapeStops || Object.keys(gtfsData.shapeStops).length === 0) {
+                console.log('  Cache outdated (missing shapeStops), re-extracting...');
+                return false;
+            }
             if (!gtfsData.graphs || Object.keys(gtfsData.graphs).length === 0) buildGraphs();
             if (!gtfsData.stopRoutePos || Object.keys(gtfsData.stopRoutePos).length === 0) buildStopRoutePositions();
-            if (!gtfsData.stopSequence) buildStopSequences();
+            if (!gtfsData.stopSequence || Object.keys(gtfsData.stopSequence).length === 0) buildStopSequences();
             console.log('  GTFS cache loaded: ' + Object.keys(gtfsData.routes).length + ' routes, ' +
                 gtfsData.stops.length + ' stops, ' + Object.keys(gtfsData.shapes).length + ' shapes, ' +
                 Object.keys(gtfsData.graphs).length + ' graphs\n');
@@ -83,13 +102,18 @@ function extractAll() {
         });
 
         const tripRoutes = {};
+        gtfsData.tripShapes = {};
+        gtfsData.tripDirections = {};
         parseCSV('trips.txt', t => {
             if (t.trip_id && t.route_id) {
                 tripRoutes[t.trip_id] = { route_id: t.route_id, headsign: t.trip_headsign || '', direction: t.direction_id || '', shape_id: t.shape_id || '' };
+                gtfsData.tripShapes[t.trip_id] = t.shape_id || '';
+                gtfsData.tripDirections[t.trip_id] = t.direction_id || '';
             }
         });
 
         const stopTimes = {};
+        const shapeStopsMap = {};
         parseCSV('stop_times.txt', st => {
             if (st.trip_id && st.stop_id) {
                 const trip = tripRoutes[st.trip_id];
@@ -101,8 +125,17 @@ function extractAll() {
                         headsign: trip.headsign,
                         direction: trip.direction
                     });
+                    if (trip.shape_id) {
+                        if (!shapeStopsMap[trip.shape_id]) shapeStopsMap[trip.shape_id] = new Set();
+                        shapeStopsMap[trip.shape_id].add(st.stop_id);
+                    }
                 }
             }
+        });
+
+        gtfsData.shapeStops = {};
+        Object.keys(shapeStopsMap).forEach(shapeId => {
+            gtfsData.shapeStops[shapeId] = Array.from(shapeStopsMap[shapeId]);
         });
 
         Object.keys(stopTimes).forEach(sid => {
@@ -217,25 +250,27 @@ function buildStopRoutePositions() {
     gtfsData.stopRoutePos = {};
     const stopMap = {};
     gtfsData.stops.forEach(s => stopMap[s.id] = s);
-    Object.keys(gtfsData.stopInfo).forEach(sid => {
-        const s = stopMap[sid];
-        if (!s) return;
-        gtfsData.stopInfo[sid].forEach(r => {
-            const sids = gtfsData.routeShapes[r.route_id];
-            if (!sids || !sids.length) return;
-            const edges = gtfsData.graphs[sids[0]];
-            if (!edges) return;
-            if (!gtfsData.stopRoutePos[r.route_id]) gtfsData.stopRoutePos[r.route_id] = {};
-            gtfsData.stopRoutePos[r.route_id][sid] = projectToGraph(s.lat, s.lon, edges);
+    
+    Object.keys(gtfsData.shapes).forEach(shapeId => {
+        const edges = gtfsData.graphs[shapeId];
+        if (!edges) return;
+        
+        gtfsData.stopRoutePos[shapeId] = {};
+        
+        const stopIds = gtfsData.shapeStops[shapeId] || [];
+        stopIds.forEach(sid => {
+            const s = stopMap[sid];
+            if (!s) return;
+            gtfsData.stopRoutePos[shapeId][sid] = projectToGraph(s.lat, s.lon, edges);
         });
     });
 }
 
 function buildStopSequences() {
     gtfsData.stopSequence = {};
-    Object.keys(gtfsData.stopRoutePos).forEach(rid => {
-        const stops = gtfsData.stopRoutePos[rid];
-        gtfsData.stopSequence[rid] = Object.keys(stops).sort((a, b) => stops[a] - stops[b]);
+    Object.keys(gtfsData.stopRoutePos).forEach(shapeId => {
+        const stops = gtfsData.stopRoutePos[shapeId];
+        gtfsData.stopSequence[shapeId] = Object.keys(stops).sort((a, b) => stops[a] - stops[b]);
     });
 }
 
@@ -248,7 +283,11 @@ function timeBlock(h) { return Math.floor(h / 2) * 2; }
 function extractFeatures(v, vehCum, nextStopId) {
     const now = new Date();
     const h = now.getHours(), dow = now.getDay();
-    const stops = gtfsData.stopRoutePos[v.rid];
+    
+    const shapeId = gtfsData.tripShapes[v.tid] || (gtfsData.routeShapes[v.rid] && gtfsData.routeShapes[v.rid][0]);
+    if (!shapeId) return null;
+    
+    const stops = gtfsData.stopRoutePos[shapeId];
     if (!stops || !nextStopId) return null;
 
     const distToStop = stops[nextStopId] - vehCum;
@@ -262,7 +301,7 @@ function extractFeatures(v, vehCum, nextStopId) {
         ts: now.toISOString(),
         vid: v.id, rid: v.rid, tid: v.tid,
         lat: v.lat, lon: v.lon,
-        spd_mps: v.spd,
+        spd_mps: v.spd / 3.6,
         cum_km: vehCum,
         dist_m: Math.round(distToStop * 1000),
         delay_s: delaysCache[v.tid] || 0,
@@ -319,7 +358,7 @@ function saveHistSpeed() {
 function getVai(rid, block) {
     const key = rid + '_' + block;
     const h = histSpeed[key];
-    return h ? h.avg : DEFAULT_SPEED;
+    return h ? Math.max(h.avg, 16) : DEFAULT_SPEED;
 }
 
 function updateVai(rid, block, speedKmph) {
@@ -352,11 +391,14 @@ function pollRealtime() {
             (vehData.Entity || vehData.Entities || []).forEach(e => {
                 const veh = e.Vehicle;
                 if (!veh || !veh.Position) return;
+                const rid = (veh.Trip && veh.Trip.RouteId) || '';
+                const tid = (veh.Trip && veh.Trip.TripId) || '';
+                const shapeId = gtfsData.tripShapes[tid] || (gtfsData.routeShapes[rid] && gtfsData.routeShapes[rid][0]) || '';
                 vehicles.push({
-                    id: e.Id, rid: (veh.Trip && veh.Trip.RouteId) || '',
-                    tid: (veh.Trip && veh.Trip.TripId) || '',
+                    id: e.Id, rid, tid,
                     lat: veh.Position.Latitude, lon: veh.Position.Longitude,
-                    spd: veh.Position.Speed || 0
+                    spd: veh.Position.Speed || 0,
+                    shapeId
                 });
             });
             vehiclesCache = vehicles;
@@ -386,41 +428,71 @@ function computeETAs() {
     const h = now.getHours(), block = timeBlock(h);
 
     vehiclesCache.forEach(v => {
-        const sids = gtfsData.routeShapes[v.rid];
-        if (!sids || !sids.length) return;
-        const edges = gtfsData.graphs[sids[0]];
+        const shapeId = gtfsData.tripShapes[v.tid] || (gtfsData.routeShapes[v.rid] && gtfsData.routeShapes[v.rid][0]);
+        if (!shapeId) return;
+        const edges = gtfsData.graphs[shapeId];
         if (!edges) return;
         const vehCum = projectToGraph(v.lat, v.lon, edges);
-        const stops = gtfsData.stopRoutePos[v.rid];
+        const stops = gtfsData.stopRoutePos[shapeId];
         if (!stops) return;
 
         // Find next stop and log feature
-        const seq = gtfsData.stopSequence[v.rid] || [];
+        const seq = gtfsData.stopSequence[shapeId] || [];
         let nextStopId = null;
+        let nextStopIdx = -1;
         for (let i = 0; i < seq.length; i++) {
-            if (vehCum < stops[seq[i]]) { nextStopId = seq[i]; break; }
+            if (vehCum < stops[seq[i]]) {
+                nextStopId = seq[i];
+                nextStopIdx = i;
+                break;
+            }
         }
 
         const feat = extractFeatures({ ...v }, vehCum, nextStopId);
         if (feat) logObservation(feat);
 
-        // Compute ETA with weighted speed (2007 paper) + rush/far adjustments
+        if (!nextStopId) return; // Bus has passed all stops on this shape
+
+        // Calculate current segment distances for weighted speed
+        const prevStopDist = nextStopIdx > 0 ? stops[seq[nextStopIdx - 1]] : 0;
+        const nextStopDist = stops[nextStopId];
+
+        const Sib = Math.max(0, vehCum - prevStopDist);
+        const Sif = Math.max(0, nextStopDist - vehCum);
+
+        const vr = v.spd;
+        const vai = getVai(v.rid, block);
+
+        // Weighted speed: closer to stop → more weight on current speed vr.
+        // Weight of vr is Sib (distance from start of segment). Weight of vai is Sif (distance to next stop).
+        const vi = (Sib + Sif > 0) ? (Sib * vr + Sif * vai) / (Sib + Sif) : vai;
+
+        // Apply rush hour factor
+        const rushFactor = feat && feat.rush ? RUSH_FACTOR : 1;
+        // Apply far status: if close to stop, reduce speed (bus slowing down)
+        const farFactor = feat && !feat.far ? 0.7 : 1;
+
+        // Travel speed and time on current segment
+        const finalCurrentSpeed = Math.max(vi * rushFactor * farFactor, 3);
+        const tCurrent = Sif / finalCurrentSpeed; // travel time to next stop in hours
+
+        // Compute ETA for all downstream stops
         Object.keys(stops).forEach(sid => {
             if (vehCum >= stops[sid]) return;
-            const remaining = stops[sid] - vehCum;
-            const vr = v.spd * 3.6;
-            const vai = getVai(v.rid, block);
-            // Weighted speed: closer to stop → more weight on current speed
-            const totalLen = stops[sid]; // total route length to this stop
-            const a = totalLen - vehCum; // dist to stop (Sif)
-            const b = vehCum;             // dist from start (Sib approximation)
-            const vi = (a * vr + b * vai) / (a + b) || vai;
-            // Apply rush hour factor
-            const rushFactor = feat && feat.rush ? RUSH_FACTOR : 1;
-            // Apply far status: if close to stop, reduce speed (bus slowing down)
-            const farFactor = feat && !feat.far ? 0.7 : 1;
-            const finalSpeed = Math.max(vi * rushFactor * farFactor, 3);
-            const eta = Math.round(remaining / finalSpeed * 60);
+
+            let etaHrs = 0;
+            if (sid === nextStopId) {
+                etaHrs = tCurrent;
+            } else if (stops[sid] > nextStopDist) {
+                // For downstream stops, remaining distance from next stop to sid is covered at historical speed (adjusted for rush hour)
+                const distFromNextStop = stops[sid] - nextStopDist;
+                const downstreamSpeed = Math.max(vai * rushFactor, 3);
+                etaHrs = tCurrent + distFromNextStop / downstreamSpeed;
+            } else {
+                return;
+            }
+
+            const eta = Math.round(etaHrs * 60);
             if (eta > ETA_MAX_MIN) return;
             if (!etas[sid]) etas[sid] = {};
             if (!etas[sid][v.rid] || eta < etas[sid][v.rid].eta) {
@@ -429,7 +501,7 @@ function computeETAs() {
         });
 
         // Update historical speed for the route
-        if (v.spd > 0) updateVai(v.rid, block, v.spd * 3.6);
+        if (v.spd > 10) updateVai(v.rid, block, v.spd);
     });
     etasCache = etas;
 }
@@ -472,9 +544,16 @@ http.createServer((req, res) => {
         res.writeHead(200, jHead);
         return res.end(JSON.stringify(gtfsData.stops));
     }
-    if (url === '/api/shapes') {
+    if (url.startsWith('/api/shapes')) {
+        const u = new URL(url, 'http://localhost');
+        const id = u.searchParams.get('id');
         res.writeHead(200, jHead);
-        return res.end(JSON.stringify(gtfsData.shapes));
+        if (id) {
+            const sh = gtfsData.shapes[id];
+            return res.end(JSON.stringify(sh || []));
+        } else {
+            return res.end(JSON.stringify(gtfsData.shapes));
+        }
     }
     if (url === '/api/stop-info') {
         res.writeHead(200, jHead);
@@ -483,6 +562,10 @@ http.createServer((req, res) => {
     if (url === '/api/route-shapes') {
         res.writeHead(200, jHead);
         return res.end(JSON.stringify(gtfsData.routeShapes));
+    }
+    if (url === '/api/shape-stops') {
+        res.writeHead(200, jHead);
+        return res.end(JSON.stringify(gtfsData.stopSequence));
     }
     if (url === '/api/stats') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
