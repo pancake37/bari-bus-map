@@ -1,0 +1,21 @@
+name: ESLint
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  eslint:
+    name: Run ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ESLint and plugins
+        run: npm install eslint eslint-plugin-html --no-save
+
+      - name: Run ESLint
+        run: npx eslint . --ext .js,.html
