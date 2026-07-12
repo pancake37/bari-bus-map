@@ -115,7 +115,7 @@ window.onerror = function(message, source, lineno, colno) {
   div.innerHTML = '<strong>Client-side error:</strong><br>' + message + ' at ' + (source ? source.split('/').pop() : 'unknown') + ':' + lineno + ':' + colno;
   document.body.appendChild(div);
 };
-var map = L.map('map',{center:[41.1055,16.8405],zoom:12,zoomControl:true});
+var map = L.map('map',{center:[41.1055,16.8405],zoom:12,preferCanvas:true,zoomControl:true});
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
   maxZoom:20,
   attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
@@ -136,7 +136,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null;
+var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null;
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -369,6 +369,7 @@ function clearRouteLine(){
   if(routeTraveledLine){map.removeLayer(routeTraveledLine);routeTraveledLine=null;}
   if(routeRemainingLine){map.removeLayer(routeRemainingLine);routeRemainingLine=null;}
   if(routeLabel){map.removeLayer(routeLabel);routeLabel=null;}
+  activeShapePoints=null;
 }
 function showRouteLine(rid, vid){
   clearRouteLine();
@@ -391,6 +392,7 @@ function showRouteLine(rid, vid){
     .then(function(pts){
       if(!pts || !pts.length) return;
       var ll=pts.map(function(p){return [p.lat,p.lon];});
+      activeShapePoints=ll;
       var st=getStyle(rid);
 
       if(v){
@@ -436,13 +438,18 @@ function showRouteLine(rid, vid){
 }
 
 function updateMarkerVisibilities() {
+  var currentZoom = map.getZoom();
   var currentState = "closed_hidden";
   if (spStop) {
     currentState = "stop_" + spStop.id;
   } else if (spVehicle) {
     currentState = "vehicle_" + spVehicle.id;
   } else if (stopsVisible) {
-    currentState = "closed_visible";
+    if (currentZoom >= 13) {
+      currentState = "closed_visible";
+    } else {
+      currentState = "closed_hidden_zoom";
+    }
   }
 
   if (currentState !== lastStopsState) {
@@ -451,8 +458,13 @@ function updateMarkerVisibilities() {
     
     if (spStop) {
       var s = spStop;
-      var m = L.marker([s.lat, s.lon], {
-        icon: L.divIcon({className: '', html: '<div style="width:10px;height:10px;background:#3b82f6;border:2.5px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,.3)"></div>', iconSize: [10, 10], iconAnchor: [5, 5]})
+      var m = L.circleMarker([s.lat, s.lon], {
+        radius: 6,
+        fillColor: '#3b82f6',
+        color: '#ffffff',
+        weight: 2,
+        fillOpacity: 1,
+        opacity: 1
       });
       m.on('click', function(e) { L.DomEvent.stopPropagation(e); openStopPanel(s); });
       stopLayer.addLayer(m);
@@ -465,17 +477,27 @@ function updateMarkerVisibilities() {
       seq.forEach(function(stopId) {
         var s = stopMap[stopId];
         if (!s) return;
-        var m = L.marker([s.lat, s.lon], {
-          icon: L.divIcon({className: '', html: '<div style="width:7px;height:7px;background:#64748b;border:2px solid white;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.15)"></div>', iconSize: [7, 7], iconAnchor: [3.5, 3.5]})
+        var m = L.circleMarker([s.lat, s.lon], {
+          radius: 3.5,
+          fillColor: '#64748b',
+          color: '#ffffff',
+          weight: 1.5,
+          fillOpacity: 1,
+          opacity: 1
         });
         m.on('click', function(e) { L.DomEvent.stopPropagation(e); openStopPanel(s); });
         stopLayer.addLayer(m);
       });
     } else {
-      if (stopsVisible) {
+      if (stopsVisible && currentZoom >= 13) {
         stopData.forEach(function(s) {
-          var m = L.marker([s.lat, s.lon], {
-            icon: L.divIcon({className: '', html: '<div style="width:7px;height:7px;background:#64748b;border:2px solid white;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.15)"></div>', iconSize: [7, 7], iconAnchor: [3.5, 3.5]})
+          var m = L.circleMarker([s.lat, s.lon], {
+            radius: 3.5,
+            fillColor: '#64748b',
+            color: '#ffffff',
+            weight: 1.5,
+            fillOpacity: 1,
+            opacity: 1
           });
           m.on('click', function(e) { L.DomEvent.stopPropagation(e); openStopPanel(s); });
           stopLayer.addLayer(m);
@@ -515,6 +537,7 @@ function updateMarkerVisibilities() {
 
 // Close sidebar on map click or Escape
 map.on('click',closeStopPanel);
+map.on('zoomend',updateMarkerVisibilities);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeStopPanel();});
 
 // Bus marker
@@ -563,6 +586,35 @@ async function fetchData(){
     });
     Object.keys(markers).forEach(function(id){if(!ids[id]){map.removeLayer(markers[id]);delete markers[id];}});
     updateMarkerVisibilities();
+    
+    if (spVehicle && activeShapePoints) {
+      var v = spVehicle;
+      var ll = activeShapePoints;
+      var closestIdx = 0;
+      var minDist = Infinity;
+      for(var i=0; i<ll.length; i++){
+        var d = (v.lat - ll[i][0])*(v.lat - ll[i][0]) + (v.lon - ll[i][1])*(v.lon - ll[i][1]);
+        if(d < minDist){
+          minDist = d;
+          closestIdx = i;
+        }
+      }
+      var traveled = ll.slice(0, closestIdx + 1);
+      var remaining = ll.slice(closestIdx);
+      
+      var st = getStyle(v.rid);
+      if(routeTraveledLine) {
+        routeTraveledLine.setLatLngs(traveled);
+      } else if (traveled.length > 1) {
+        routeTraveledLine = L.polyline(traveled, {color: st.bg, weight: 4.5, opacity: 0.45}).addTo(map);
+      }
+      if(routeRemainingLine) {
+        routeRemainingLine.setLatLngs(remaining);
+      } else if (remaining.length > 1) {
+        routeRemainingLine = L.polyline(remaining, {color: st.bg, weight: 8, opacity: 0.95}).addTo(map);
+      }
+    }
+    
     document.getElementById('ts').textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     var cnt=document.getElementById('cnt');
     if(cnt)cnt.textContent=Object.keys(markers).length+' buses';
