@@ -692,6 +692,8 @@ function updateLineSplit(lat, lon, rid) {
   var remaining = ll.slice(closestIdx + 1);
   remaining.unshift([lat, lon]);
   
+  console.log("[AMTAB split debug] lat:", lat, "lon:", lon, "closestIdx:", closestIdx, "traveled:", traveled.length, "remaining:", remaining.length);
+  
   var st = getStyle(rid);
   var remColor = spVehicle ? getDelayColor(spVehicle.delay) : st.bg;
   
@@ -814,7 +816,11 @@ async function fetchData(){
     
     updateMarkerVisibilities();
     
-    document.getElementById('ts').textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    var tsText = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    if(spVehicle) {
+      tsText += " | Bus: " + spVehicle.id + " | Delay: " + Math.round(spVehicle.delay/60) + "m | Split: " + (activeShapePoints ? "Active (" + activeShapePoints.length + ")" : "None");
+    }
+    document.getElementById('ts').textContent = tsText;
     var cnt=document.getElementById('cnt');
     if(cnt)cnt.textContent=Object.keys(markers).length+' buses';
   }catch(e){console.error('[AMTAB]',e);}
