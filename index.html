@@ -227,6 +227,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/ewoken/Leaflet.MovingMarker@master/MovingMarker.js"></script>
 <script>
 window.onerror = function(message, source, lineno, colno) {
   var div = document.createElement('div');
@@ -255,7 +256,22 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.featureGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null,animStates={};
+var markers={},routeColors={},stopLayer=L.featureGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null;
+
+// Encoded polyline decoder
+function decodeShapePolyline(str) {
+  var pts = [], prevLat = 0, prevLon = 0, idx = 0, PREC = 100000;
+  while (idx < str.length) {
+    var res = 0, shift = 0, byte;
+    do { byte = str.charCodeAt(idx++) - 63; res |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+    prevLat += (res & 1 ? ~(res >> 1) : res >> 1);
+    res = 0; shift = 0;
+    do { byte = str.charCodeAt(idx++) - 63; res |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+    prevLon += (res & 1 ? ~(res >> 1) : res >> 1);
+    pts.push({ lat: prevLat / PREC, lon: prevLon / PREC });
+  }
+  return pts;
+}
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -362,9 +378,9 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
   var seq = sid ? (shapeStops[sid] || []) : [];
   
   if(seq.length > 0) {
-    fetch('/api/shapes?id=' + sid)
-      .then(function(r){return r.json();})
-      .then(function(pts){
+    fetch('/api/shapes?id=' + sid + '&encoded=1')
+      .then(function(r){return r.text();})
+      .then(function(raw){var pts = decodeShapePolyline(raw);
         if(!pts || !pts.length) return;
         var ll = pts.map(function(p){return [p.lat,p.lon];});
         
@@ -519,9 +535,9 @@ function showRouteLine(rid, vid){
   
   if(!sid) return;
   
-  fetch('/api/shapes?id=' + sid)
-    .then(function(r){return r.json();})
-    .then(function(pts){
+  fetch('/api/shapes?id=' + sid + '&encoded=1')
+    .then(function(r){return r.text();})
+    .then(function(raw){var pts = decodeShapePolyline(raw);
       if(!pts || !pts.length) return;
       var ll=pts.map(function(p){return [p.lat,p.lon];});
       activeShapePoints=ll;
@@ -711,28 +727,7 @@ function updateLineSplit(lat, lon, rid) {
   }
 }
 
-function animateMarkers() {
-  var now = Date.now();
-  Object.keys(animStates).forEach(function(id) {
-    var state = animStates[id];
-    var marker = markers[id];
-    if (!marker) return;
-    
-    var elapsed = now - state.startTime;
-    var pct = Math.min(elapsed / state.duration, 1);
-    
-    var lat = state.startLat + (state.endLat - state.startLat) * pct;
-    var lon = state.startLon + (state.endLon - state.startLon) * pct;
-    
-    state.currentLat = lat;
-    state.currentLon = lon;
-    
-    marker.setLatLng([lat, lon]);
-    
-  });
-  requestAnimationFrame(animateMarkers);
-}
-requestAnimationFrame(animateMarkers);
+
 
 // Bus marker
 function makeIcon(rid,delay){
@@ -768,35 +763,14 @@ async function fetchData(){
     renderVehiclePanel();
     
     var ids={};
-    var now = Date.now();
     vehicles.forEach(function(v){
       ids[v.id]=true;
       
-      var state = animStates[v.id];
-      if(!state) {
-        state = animStates[v.id] = {
-          startLat: v.lat, startLon: v.lon,
-          endLat: v.lat, endLon: v.lon,
-          startTime: now,
-          duration: 10000
-        };
-      } else {
-        if(state.endLat !== v.lat || state.endLon !== v.lon) {
-          state.startLat = state.currentLat || state.endLat;
-          state.startLon = state.currentLon || state.endLon;
-          state.endLat = v.lat;
-          state.endLon = v.lon;
-          state.startTime = now;
-        }
-      }
-      
-      state.currentLat = state.currentLat || v.lat;
-      state.currentLon = state.currentLon || v.lon;
-      
       if(markers[v.id]){
         markers[v.id].setIcon(makeIcon(v.rid,v.delay));
+        markers[v.id].moveTo([v.lat, v.lon], 10000);
       } else {
-        markers[v.id]=L.marker([state.currentLat, state.currentLon],{icon:makeIcon(v.rid,v.delay)});
+        markers[v.id]=L.Marker.movingMarker([[v.lat, v.lon]], 10000, {icon:makeIcon(v.rid,v.delay), autostart: false});
         markers[v.id].on('click', function(e){
           L.DomEvent.stopPropagation(e);
           var freshV = lastVehicles.find(function(veh){return String(veh.id) === String(v.id);}) || v;
@@ -807,9 +781,8 @@ async function fetchData(){
     
     Object.keys(markers).forEach(function(id){
       if(!ids[id]){
-        map.removeLayer(markers[id]);
+        if (map.hasLayer(markers[id])) map.removeLayer(markers[id]);
         delete markers[id];
-        delete animStates[id];
       }
     });
     

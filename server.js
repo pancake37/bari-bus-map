@@ -42,6 +42,10 @@ let gtfsData = {
 };
 let vehiclesCache = [], delaysCache = {}, etasCache = {};
 let histSpeed = {}, obsBuffer = [], obsCount = 0, logStream = null, logDate = '';
+// Graceful fallback backup
+let lastVehiclesBackup = null, lastDelaysBackup = null, lastBackupTime = 0;
+const BACKUP_TTL_MS = 300000; // 5 min
+const MAX_OBS_BUFFER_SIZE = 10000;
 
 // ── GTFS Cache ───────────────────────────────────────────────────────────────
 
@@ -274,6 +278,63 @@ function buildStopSequences() {
     });
 }
 
+// ── Encoded Polyline (Google-style) ──────────────────────────────────────────
+
+function encodePolylineSigned(value) {
+    let current = value < 0 ? ~(value << 1) : value << 1;
+    let output = '';
+    while (current >= 0x20) {
+        output += String.fromCharCode((0x20 | (current & 0x1f)) + 63);
+        current >>= 5;
+    }
+    return output + String.fromCharCode(current + 63);
+}
+
+function encodeShapePolyline(pts) {
+    if (!pts || !pts.length) return '';
+    let prevLat = 0, prevLon = 0, out = '';
+    const PREC = 100000;
+    for (const p of pts) {
+        const lat = Math.round(p.lat * PREC);
+        const lon = Math.round(p.lon * PREC);
+        out += encodePolylineSigned(lat - prevLat);
+        out += encodePolylineSigned(lon - prevLon);
+        prevLat = lat; prevLon = lon;
+    }
+    return out;
+}
+
+function decodePolylineSigned(val) {
+    return val & 1 ? ~(val >> 1) : val >> 1;
+}
+
+function decodeShapePolyline(str) {
+    const pts = [];
+    let prevLat = 0, prevLon = 0, idx = 0;
+    const PREC = 100000;
+    while (idx < str.length) {
+        let res = 0, shift = 0, byte;
+        do { byte = str.charCodeAt(idx++) - 63; res |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+        prevLat += decodePolylineSigned(res);
+        res = 0; shift = 0;
+        do { byte = str.charCodeAt(idx++) - 63; res |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+        prevLon += decodePolylineSigned(res);
+        pts.push({ lat: prevLat / PREC, lon: prevLon / PREC });
+    }
+    return pts;
+}
+
+// ── Validation ──────────────────────────────────────────────────────────────
+
+function validateVehicle(v) {
+    if (!v || typeof v !== 'object') return false;
+    if (typeof v.lat !== 'number' || typeof v.lon !== 'number') return false;
+    if (isNaN(v.lat) || isNaN(v.lon)) return false;
+    if (v.lat < 40 || v.lat > 42 || v.lon < 16 || v.lon > 18) return false;
+    if (!v.rid && !v.tid) return false;
+    return true;
+}
+
 // ── Feature Extraction (2024 Paper) ──────────────────────────────────────────
 
 function isRushHour(h) { return (h >= RUSH_START && h < RUSH_END) || (h >= RUSH_START2 && h < RUSH_END2); }
@@ -336,7 +397,17 @@ function logObservation(feat) {
     if (!feat) return;
     obsBuffer.push(feat);
     obsCount++;
+    if (obsBuffer.length >= MAX_OBS_BUFFER_SIZE) {
+        const excess = obsBuffer.length - MAX_OBS_BUFFER_SIZE;
+        obsBuffer.splice(0, excess);
+    }
     if (obsBuffer.length >= 100) flushLogs();
+}
+
+function sweepObsBuffer() {
+    if (obsBuffer.length > MAX_OBS_BUFFER_SIZE) {
+        obsBuffer.splice(0, obsBuffer.length - MAX_OBS_BUFFER_SIZE);
+    }
 }
 
 // ── Historical Speed (vai) ──────────────────────────────────────────────────
@@ -383,7 +454,7 @@ function fetchJSON(url, cb) {
 
 function pollRealtime() {
     let pending = 2;
-    function done() { if (--pending === 0) { computeETAs(); flushLogs(); } }
+    function done() { if (--pending === 0) { computeETAs(); flushLogs(); sweepObsBuffer(); } }
 
     fetchJSON(AMTAB_VEH, (err, vehData) => {
         if (!err && vehData) {
@@ -394,7 +465,7 @@ function pollRealtime() {
                 const rid = (veh.Trip && veh.Trip.RouteId) || '';
                 const tid = (veh.Trip && veh.Trip.TripId) || '';
                 const shapeId = gtfsData.tripShapes[tid] || (gtfsData.routeShapes[rid] && gtfsData.routeShapes[rid][0]) || '';
-                vehicles.push({
+                const v = {
                     id: e.Id, rid, tid,
                     lat: veh.Position.Latitude, lon: veh.Position.Longitude,
                     spd: veh.Position.Speed || 0,
@@ -402,9 +473,16 @@ function pollRealtime() {
                     stopId: veh.StopId || null,
                     currentStopSequence: veh.CurrentStopSequence || null,
                     currentStatus: veh.CurrentStatus !== undefined ? veh.CurrentStatus : null
-                });
+                };
+                if (validateVehicle(v)) vehicles.push(v);
             });
             vehiclesCache = vehicles;
+            lastVehiclesBackup = { data: vehicles, ts: Date.now() };
+        } else {
+            if (lastVehiclesBackup && (Date.now() - lastVehiclesBackup.ts) < BACKUP_TTL_MS) {
+                const age = Math.round((Date.now() - lastVehiclesBackup.ts) / 1000);
+                vehiclesCache = lastVehiclesBackup.data;
+            }
         }
         done();
     });
@@ -420,6 +498,11 @@ function pollRealtime() {
                 }
             });
             delaysCache = d;
+            lastDelaysBackup = { data: d, ts: Date.now() };
+        } else {
+            if (lastDelaysBackup && (Date.now() - lastDelaysBackup.ts) < BACKUP_TTL_MS) {
+                delaysCache = lastDelaysBackup.data;
+            }
         }
         done();
     });
@@ -535,6 +618,8 @@ function initRealtime() {
     setInterval(flushLogs, 60000);
     // Save hist speed every 5 min
     setInterval(saveHistSpeed, 300000);
+    // Sweep stale obs buffer every 2 min
+    setInterval(sweepObsBuffer, 120000);
 }
 
 // ── Server ───────────────────────────────────────────────────────────────────
@@ -567,10 +652,13 @@ http.createServer((req, res) => {
     if (url.startsWith('/api/shapes')) {
         const u = new URL(url, 'http://localhost');
         const id = u.searchParams.get('id');
-        res.writeHead(200, staticHead);
+        const encoded = u.searchParams.get('encoded') === '1';
+        res.writeHead(200, encoded ? Object.assign({}, staticHead, { 'Content-Type': 'text/plain; charset=utf-8' }) : staticHead);
         if (id) {
             const sh = gtfsData.shapes[id];
-            return res.end(JSON.stringify(sh || []));
+            if (!sh) return res.end('[]');
+            if (encoded) return res.end(encodeShapePolyline(sh));
+            return res.end(JSON.stringify(sh));
         } else {
             return res.end(JSON.stringify(gtfsData.shapes));
         }
