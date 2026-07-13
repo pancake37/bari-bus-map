@@ -772,15 +772,15 @@ async function fetchData(){
     vehicles.forEach(function(v){
       ids[v.id]=true;
       
-      if(!animStates[v.id]) {
-        animStates[v.id] = {
+      var state = animStates[v.id];
+      if(!state) {
+        state = animStates[v.id] = {
           startLat: v.lat, startLon: v.lon,
           endLat: v.lat, endLon: v.lon,
           startTime: now,
           duration: 10000
         };
       } else {
-        var state = animStates[v.id];
         if(state.endLat !== v.lat || state.endLon !== v.lon) {
           state.startLat = state.currentLat || state.endLat;
           state.startLon = state.currentLon || state.endLon;
@@ -790,7 +790,6 @@ async function fetchData(){
         }
       }
       
-      var state = animStates[v.id];
       state.currentLat = state.currentLat || v.lat;
       state.currentLon = state.currentLon || v.lon;
       
