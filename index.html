@@ -729,9 +729,6 @@ function animateMarkers() {
     
     marker.setLatLng([lat, lon]);
     
-    if (spVehicle && String(spVehicle.id) === String(id)) {
-      updateLineSplit(lat, lon, spVehicle.rid);
-    }
   });
   requestAnimationFrame(animateMarkers);
 }
@@ -761,6 +758,9 @@ async function fetchData(){
     if(spVehicle) {
       var uv = vehicles.find(function(veh){return String(veh.id) === String(spVehicle.id);});
       if(uv) spVehicle = uv;
+      if(activeShapePoints) {
+        updateLineSplit(spVehicle.lat, spVehicle.lon, spVehicle.rid);
+      }
     }
     lastVehicles=vehicles;
     etasCache=etas;
