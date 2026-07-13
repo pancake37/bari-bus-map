@@ -39,24 +39,143 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .sp-h .cl:hover{color:#ffffff}
 
 /* Sidebar Row */
-.sp-l{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #1a1a1a;cursor:pointer;background:#18181b;margin:4px 8px;border-radius:8px;transition:background 0.2s, transform 0.1s}
-.sp-l:hover{background:#27272a;transform:scale(1.01)}
-.sp-l:active{transform:scale(0.99)}
-.sp-l .ll{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
-.sp-l .num{font-size:1.8rem;font-weight:800;line-height:1.1}
-.sp-l .dir-row{display:flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700;color:#f4f4f5}
-.sp-l .dir-row .dest{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sp-l .stop-sub{font-size:.72rem;color:#71717a}
-.sp-l .lr{text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;justify-content:center}
-.sp-l .eta-container{display:flex;align-items:flex-start}
-.sp-l .min-val{font-size:2.2rem;font-weight:800;line-height:1}
-.sp-l .rt-icon{font-size:.75rem;margin-top:1px;margin-left:2px}
-.sp-l .rt-live{animation:pulse-rt 1.5s infinite;display:inline-block}
-@keyframes pulse-rt{
-  0%,100%{opacity:1;transform:scale(1)}
-  50%{opacity:.5;transform:scale(1.15)}
+/* Sidebar Row - Tabular Departures Layout */
+.sp-l {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: #151518;
+  border: 1px solid #222226;
+  margin: 6px 8px;
+  border-radius: 8px;
+  transition: background 0.2s, border-color 0.2s, transform 0.1s;
+  cursor: pointer;
 }
-.sp-l .eta-unit{font-size:.7rem;color:#71717a;margin-top:1px;text-transform:uppercase;letter-spacing:.5px;font-weight:700}
+.sp-l:hover {
+  background: #1c1c21;
+  border-color: #3b82f6;
+  transform: scale(1.01);
+}
+.sp-l:active {
+  transform: scale(0.99);
+}
+.sp-l .left-col {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+.sp-l .route-badge {
+  font-size: 1.1rem;
+  font-weight: 800;
+  padding: 5px 10px;
+  border-radius: 6px;
+  min-width: 44px;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+  flex-shrink: 0;
+}
+.sp-l .info-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.sp-l .dest {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-l .stop-sub {
+  font-size: 0.72rem;
+  color: #71717a;
+}
+.sp-l .right-col {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+.sp-l .eta-box {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.sp-l .min-val {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 1.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.sp-l .eta-unit {
+  font-size: 0.7rem;
+  color: #71717a;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.sp-l .live-pulse-container {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+.sp-l .live-pulse {
+  width: 7px;
+  height: 7px;
+  background-color: #10b981;
+  border-radius: 50%;
+  position: relative;
+}
+.sp-l .live-pulse::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid #10b981;
+  border-radius: 50%;
+  animation: pulse-live 1.5s infinite ease-out;
+  opacity: 0;
+}
+@keyframes pulse-live {
+  0% { transform: scale(0.5); opacity: 1; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+.sp-l .live-text {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #10b981;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.sp-l .delay-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-top: 4px;
+  text-transform: uppercase;
+}
+.sp-l .delay-badge.delayed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.sp-l .delay-badge.early {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
 @media(max-width:640px){
   #sp{
     width:100%;
@@ -90,12 +209,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .status-badge{display:inline-block;padding:3px 8px;border-radius:4px;font-size:.7rem;font-weight:700;text-transform:uppercase;margin-top:6px;letter-spacing:.3px}
 .status-badge.delayed{background:rgba(239,68,68,0.2);color:#ef4444;border:1px solid rgba(239,68,68,0.4)}
 .status-badge.early{background:rgba(16,185,129,0.2);color:#10b981;border:1px solid rgba(16,185,129,0.4)}
-.status-badge.ontime{background:rgba(16,185,129,0.2);color:#10b981;border:1px solid rgba(16,185,129,0.4)}
+
 </style>
 </head>
 <body>
 <div class="hdr">
-<div class="hl"><h1>Bari</h1><span class="sub">AMTAB • Realtime</span></div>
+<div class="hl"><h1>Bari v2.2</h1><span class="sub">AMTAB • Realtime</span></div>
 <div class="st"><div class="dot"></div><span>live</span></div>
 </div>
 <div id="map"></div>
@@ -136,7 +255,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.layerGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null;
+var markers={},routeColors={},stopLayer=L.featureGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null,animStates={};
 
 // Load data
 fetch('/api/routes').then(function(r){return r.json();}).then(function(d){
@@ -202,8 +321,9 @@ function closeStopPanel(){
 function openStopPanel(s){
   clearRouteLine();
   spVehicle=null;
-  spStop=s;renderStopPanel();
+  spStop=s;
   spEl.classList.add('open');
+  renderStopPanel();
   var mapW=map.getSize().x;
   if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
   document.getElementById('ts').textContent='';
@@ -213,8 +333,8 @@ function openVehiclePanel(v){
   clearRouteLine();
   spStop=null;
   spVehicle=v;
-  renderVehiclePanel();
   spEl.classList.add('open');
+  renderVehiclePanel();
   var mapW=map.getSize().x;
   if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
   document.getElementById('ts').textContent='';
@@ -332,30 +452,41 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
   var html='',routes=stopInfo[s.id]||[],etas=etasCache[s.id]||{};
   routes.forEach(function(r){
     var st=getStyle(r.route_id),best=etas[r.route_id];
-    var disp='&mdash;',delayStr='',vid='';
+    var disp='&mdash;',delayHtml='',vid='';
     if(best){
       disp=best.eta;
       vid=best.vid;
-      if(best.delay>60)delayStr='<div style="font-size:.65rem;background:rgba(239,68,68,0.25);color:#fff;margin-top:4px;font-weight:700;padding:2px 6px;border-radius:4px;border:1px solid rgba(239,68,68,0.4)">'+Math.round(best.delay/60)+'\' RITARDO</div>';
-      else if(best.delay<-60)delayStr='<div style="font-size:.65rem;background:rgba(16,185,129,0.25);color:#fff;margin-top:4px;font-weight:700;padding:2px 6px;border-radius:4px;border:1px solid rgba(16,185,129,0.4)">'+Math.round(-best.delay/60)+'\' ANTICIPO</div>';
+      if(best.delay>60) {
+        delayHtml='<div class="delay-badge delayed">'+Math.round(best.delay/60)+'\' ritardo</div>';
+      } else if(best.delay<-60) {
+        delayHtml='<div class="delay-badge early">'+Math.round(-best.delay/60)+'\' anticipo</div>';
+      }
     }
-    html+='<div class="sp-l" data-route="'+r.route_id+'" data-vid="'+vid+'" style="background:'+st.bg+';color:'+st.fg+'">'+
-      '<div class="ll">'+
-      '<div class="num" style="color:'+st.fg+'">'+st.name+'</div>'+
-      '<div class="dir-row" style="color:'+st.fg+'">'+
-      '<span class="arr" style="color:'+st.fg+'">➔</span>'+
-      (r.headsign?'<span class="dest" style="color:'+st.fg+'">'+r.headsign+'</span>':'<span class="dest" style="color:'+st.fg+'">Line '+st.name+'</span>')+
-      '</div>'+
-      '<div class="stop-sub" style="color:rgba(255,255,255,0.75)">'+s.name+'</div>'+
-      '</div>'+
-      '<div class="lr">'+
-      '<div class="eta-container">'+
-      '<span class="min-val" style="color:'+st.fg+'">'+disp+'</span>'+
-      (best?'<span class="rt-icon rt-live" style="color:'+st.fg+'">📶</span>':'')+
-      '</div>'+
-      '<div class="eta-unit" style="color:rgba(255,255,255,0.75)">minuti</div>'+
-      delayStr+
-      '</div></div>';
+    
+    var livePulseHtml = '';
+    if(best) {
+      livePulseHtml = '<div class="live-pulse-container">' +
+        '<div class="live-pulse"></div>' +
+        '<div class="live-text">live</div>' +
+        '</div>';
+    }
+    
+    html+='<div class="sp-l" data-route="'+r.route_id+'" data-vid="'+vid+'">' +
+      '<div class="left-col">' +
+        '<div class="route-badge" style="background:'+st.bg+';color:'+st.fg+'">'+st.name+'</div>' +
+        '<div class="info-col">' +
+          '<div class="dest">'+(r.headsign ? r.headsign : 'Line '+st.name)+'</div>' +
+          '<div class="stop-sub">'+s.name+'</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="right-col">' +
+        '<div class="eta-box">' +
+          '<span class="min-val" style="color:'+(best ? '#10b981' : '#a1a1aa')+'">'+disp+'</span>' +
+          '<span class="eta-unit">&nbsp;min</span>' +
+        '</div>' +
+        (livePulseHtml || delayHtml) +
+      '</div>' +
+    '</div>';
   });
   if(!html)html='<div style="text-align:center;padding:20px;color:#71717a;font-size:.85rem">No buses nearby</div>';
   scEl.innerHTML=html;
@@ -374,6 +505,7 @@ function clearRouteLine(){
 function showRouteLine(rid, vid){
   clearRouteLine();
   var v = lastVehicles.find(function(veh){return String(veh.id) === String(vid);});
+  if(v) spVehicle = v;
   
   var sid = null;
   if(v && v.shapeId) {
@@ -396,25 +528,7 @@ function showRouteLine(rid, vid){
       var st=getStyle(rid);
 
       if(v){
-        // Project vehicle to shape by finding closest point in the shape point array
-        var closestIdx = 0;
-        var minDist = Infinity;
-        for(var i=0; i<ll.length; i++){
-          var d = (v.lat - ll[i][0])*(v.lat - ll[i][0]) + (v.lon - ll[i][1])*(v.lon - ll[i][1]);
-          if(d < minDist){
-            minDist = d;
-            closestIdx = i;
-          }
-        }
-        var traveled = ll.slice(0, closestIdx + 1);
-        var remaining = ll.slice(closestIdx);
-        
-        if(traveled.length > 1){
-          routeTraveledLine = L.polyline(traveled, {color: st.bg, weight: 4.5, opacity: 0.45}).addTo(map);
-        }
-        if(remaining.length > 1){
-          routeRemainingLine = L.polyline(remaining, {color: st.bg, weight: 8, opacity: 0.95}).addTo(map);
-        }
+        updateLineSplit(v.lat, v.lon, rid);
       } else {
         // Fallback if no vehicle is active
         routeRemainingLine = L.polyline(ll, {color: st.bg, weight: 6, opacity: 0.9}).addTo(map);
@@ -430,7 +544,13 @@ function showRouteLine(rid, vid){
       }).addTo(map);
       
       var bounds = routeRemainingLine ? routeRemainingLine.getBounds() : (routeTraveledLine ? routeTraveledLine.getBounds() : null);
-      if(bounds) map.fitBounds(bounds.pad(0.1));
+      if(bounds) {
+        if(v) {
+          map.setView([v.lat, v.lon], Math.max(map.getZoom(), 15));
+        } else {
+          map.fitBounds(bounds.pad(0.1));
+        }
+      }
     })
     .catch(function(e){console.error('[AMTAB] Failed to load shape', e);});
   
@@ -443,7 +563,7 @@ function updateMarkerVisibilities() {
   if (spStop) {
     currentState = "stop_" + spStop.id;
   } else if (spVehicle) {
-    currentState = "vehicle_" + spVehicle.id;
+    currentState = "vehicle_" + spVehicle.id + "_" + (spVehicle.stopId || "");
   } else if (stopsVisible) {
     if (currentZoom >= 13) {
       currentState = "closed_visible";
@@ -474,12 +594,16 @@ function updateMarkerVisibilities() {
       var stopMap = {};
       stopData.forEach(function(st) { stopMap[st.id] = st; });
       
-      seq.forEach(function(stopId) {
+      var targetIdx = seq.indexOf(spVehicle.stopId);
+      console.log("[AMTAB debug] Vehicle selected:", spVehicle.id, "shapeId:", sid, "seq length:", seq.length, "vehicle stopId:", spVehicle.stopId, "targetIdx:", targetIdx);
+      
+      seq.forEach(function(stopId, idx) {
+        if (targetIdx !== -1 && idx < targetIdx) return;
         var s = stopMap[stopId];
         if (!s) return;
         var m = L.circleMarker([s.lat, s.lon], {
-          radius: 3.5,
-          fillColor: '#64748b',
+          radius: 4.5,
+          fillColor: '#000000',
           color: '#ffffff',
           weight: 1.5,
           fillOpacity: 1,
@@ -504,6 +628,8 @@ function updateMarkerVisibilities() {
         });
       }
     }
+    
+    stopLayer.bringToFront();
   }
 
   // Update vehicle visibility
@@ -540,11 +666,80 @@ map.on('click',closeStopPanel);
 map.on('zoomend',updateMarkerVisibilities);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeStopPanel();});
 
+function getDelayColor(delay) {
+  if (delay <= 60) return '#10b981'; // Green
+  if (delay <= 300) return '#f97316'; // Orange
+  return '#ef4444'; // Red
+}
+
+
+function updateLineSplit(lat, lon, rid) {
+  if (!activeShapePoints) return;
+  var ll = activeShapePoints;
+  var closestIdx = 0;
+  var minDist = Infinity;
+  for(var i=0; i<ll.length; i++){
+    var d = (lat - ll[i][0])*(lat - ll[i][0]) + (lon - ll[i][1])*(lon - ll[i][1]);
+    if(d < minDist){
+      minDist = d;
+      closestIdx = i;
+    }
+  }
+  
+  var traveled = ll.slice(0, closestIdx + 1);
+  traveled.push([lat, lon]);
+  
+  var remaining = ll.slice(closestIdx + 1);
+  remaining.unshift([lat, lon]);
+  
+  var st = getStyle(rid);
+  var remColor = spVehicle ? getDelayColor(spVehicle.delay) : st.bg;
+  
+  if(routeTraveledLine) {
+    routeTraveledLine.setLatLngs(traveled);
+  } else if (traveled.length > 1) {
+    routeTraveledLine = L.polyline(traveled, {color: st.bg, weight: 4.5, opacity: 0.45}).addTo(map);
+  }
+  
+  if(routeRemainingLine) {
+    routeRemainingLine.setLatLngs(remaining);
+    routeRemainingLine.setStyle({color: remColor});
+  } else if (remaining.length > 1) {
+    routeRemainingLine = L.polyline(remaining, {color: remColor, weight: 8, opacity: 0.95}).addTo(map);
+  }
+}
+
+function animateMarkers() {
+  var now = Date.now();
+  Object.keys(animStates).forEach(function(id) {
+    var state = animStates[id];
+    var marker = markers[id];
+    if (!marker) return;
+    
+    var elapsed = now - state.startTime;
+    var pct = Math.min(elapsed / state.duration, 1);
+    
+    var lat = state.startLat + (state.endLat - state.startLat) * pct;
+    var lon = state.startLon + (state.endLon - state.startLon) * pct;
+    
+    state.currentLat = lat;
+    state.currentLon = lon;
+    
+    marker.setLatLng([lat, lon]);
+    
+    if (spVehicle && String(spVehicle.id) === String(id)) {
+      updateLineSplit(lat, lon, spVehicle.rid);
+    }
+  });
+  requestAnimationFrame(animateMarkers);
+}
+requestAnimationFrame(animateMarkers);
+
 // Bus marker
 function makeIcon(rid,delay){
   var st=getStyle(rid),di=delayInfo(delay);
   return L.divIcon({
-    className:'',
+    className:'bus-marker',
     html:'<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer">'+
       '<div style="background:'+di.c+';color:#fff;font-size:9px;font-weight:700;font-family:monospace;padding:2px 7px;border-radius:999px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,.25);line-height:1.5;min-width:24px;text-align:center;letter-spacing:.2px">'+st.name+'</div>'+
       '<div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:5px solid '+di.c+'"></div>'+
@@ -569,51 +764,55 @@ async function fetchData(){
     etasCache=etas;
     renderStopPanel();
     renderVehiclePanel();
+    
     var ids={};
+    var now = Date.now();
     vehicles.forEach(function(v){
       ids[v.id]=true;
-      var ll=[v.lat,v.lon];
+      
+      if(!animStates[v.id]) {
+        animStates[v.id] = {
+          startLat: v.lat, startLon: v.lon,
+          endLat: v.lat, endLon: v.lon,
+          startTime: now,
+          duration: 10000
+        };
+      } else {
+        var state = animStates[v.id];
+        if(state.endLat !== v.lat || state.endLon !== v.lon) {
+          state.startLat = state.currentLat || state.endLat;
+          state.startLon = state.currentLon || state.endLon;
+          state.endLat = v.lat;
+          state.endLon = v.lon;
+          state.startTime = now;
+        }
+      }
+      
+      var state = animStates[v.id];
+      state.currentLat = state.currentLat || v.lat;
+      state.currentLon = state.currentLon || v.lon;
+      
       if(markers[v.id]){
-        markers[v.id].setLatLng(ll);
         markers[v.id].setIcon(makeIcon(v.rid,v.delay));
       } else {
-        markers[v.id]=L.marker(ll,{icon:makeIcon(v.rid,v.delay)});
+        markers[v.id]=L.marker([state.currentLat, state.currentLon],{icon:makeIcon(v.rid,v.delay)});
         markers[v.id].on('click', function(e){
           L.DomEvent.stopPropagation(e);
-          openVehiclePanel(v);
+          var freshV = lastVehicles.find(function(veh){return String(veh.id) === String(v.id);}) || v;
+          openVehiclePanel(freshV);
         });
       }
     });
-    Object.keys(markers).forEach(function(id){if(!ids[id]){map.removeLayer(markers[id]);delete markers[id];}});
-    updateMarkerVisibilities();
     
-    if (spVehicle && activeShapePoints) {
-      var v = spVehicle;
-      var ll = activeShapePoints;
-      var closestIdx = 0;
-      var minDist = Infinity;
-      for(var i=0; i<ll.length; i++){
-        var d = (v.lat - ll[i][0])*(v.lat - ll[i][0]) + (v.lon - ll[i][1])*(v.lon - ll[i][1]);
-        if(d < minDist){
-          minDist = d;
-          closestIdx = i;
-        }
+    Object.keys(markers).forEach(function(id){
+      if(!ids[id]){
+        map.removeLayer(markers[id]);
+        delete markers[id];
+        delete animStates[id];
       }
-      var traveled = ll.slice(0, closestIdx + 1);
-      var remaining = ll.slice(closestIdx);
-      
-      var st = getStyle(v.rid);
-      if(routeTraveledLine) {
-        routeTraveledLine.setLatLngs(traveled);
-      } else if (traveled.length > 1) {
-        routeTraveledLine = L.polyline(traveled, {color: st.bg, weight: 4.5, opacity: 0.45}).addTo(map);
-      }
-      if(routeRemainingLine) {
-        routeRemainingLine.setLatLngs(remaining);
-      } else if (remaining.length > 1) {
-        routeRemainingLine = L.polyline(remaining, {color: st.bg, weight: 8, opacity: 0.95}).addTo(map);
-      }
-    }
+    });
+    
+    updateMarkerVisibilities();
     
     document.getElementById('ts').textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     var cnt=document.getElementById('cnt');

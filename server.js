@@ -611,7 +611,11 @@ http.createServer((req, res) => {
     fs.readFile(file, (err, data) => {
         if (err) { res.writeHead(404); res.end('Not found'); return; }
         const ext = path.extname(file);
-        res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+        const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+        if (ext === '.html' || ext === '.js' || ext === '.css') {
+            headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0';
+        }
+        res.writeHead(200, headers);
         res.end(data);
     });
 }).listen(PORT, () => {
