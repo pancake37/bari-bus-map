@@ -38,7 +38,9 @@ let gtfsData = {
     shapeStops: {},
     graphs: {},
     stopRoutePos: {},
-    stopSequence: {}
+    stopSequence: {},
+    calendar: {},
+    calendarDates: {}
 };
 let vehiclesCache = [], delaysCache = {}, etasCache = {};
 let histSpeed = {}, obsBuffer = [], obsCount = 0, logStream = null, logDate = '';
@@ -46,6 +48,8 @@ let histSpeed = {}, obsBuffer = [], obsCount = 0, logStream = null, logDate = ''
 let lastVehiclesBackup = null, lastDelaysBackup = null, lastBackupTime = 0;
 const BACKUP_TTL_MS = 300000; // 5 min
 const MAX_OBS_BUFFER_SIZE = 10000;
+// Service calendar (populated during extractAll)
+let serviceIdMap = {}; // trip_id → service_id
 
 // ── GTFS Cache ───────────────────────────────────────────────────────────────
 
@@ -58,6 +62,8 @@ function loadCache() {
             gtfsData.tripShapes = gtfsData.tripShapes || {};
             gtfsData.tripDirections = gtfsData.tripDirections || {};
             gtfsData.shapeStops = gtfsData.shapeStops || {};
+            gtfsData.calendar = gtfsData.calendar || {};
+            gtfsData.calendarDates = gtfsData.calendarDates || {};
             if (!gtfsData.shapeStops || Object.keys(gtfsData.shapeStops).length === 0) {
                 console.log('  Cache outdated (missing shapeStops), re-extracting...');
                 return false;
@@ -108,11 +114,13 @@ function extractAll() {
         const tripRoutes = {};
         gtfsData.tripShapes = {};
         gtfsData.tripDirections = {};
+        serviceIdMap = {};
         parseCSV('trips.txt', t => {
             if (t.trip_id && t.route_id) {
                 tripRoutes[t.trip_id] = { route_id: t.route_id, headsign: t.trip_headsign || '', direction: t.direction_id || '', shape_id: t.shape_id || '' };
                 gtfsData.tripShapes[t.trip_id] = t.shape_id || '';
                 gtfsData.tripDirections[t.trip_id] = t.direction_id || '';
+                if (t.service_id) serviceIdMap[t.trip_id] = t.service_id;
             }
         });
 
@@ -142,8 +150,25 @@ function extractAll() {
             gtfsData.shapeStops[shapeId] = Array.from(shapeStopsMap[shapeId]);
         });
 
-        Object.keys(stopTimes).forEach(sid => {
-            const times = stopTimes[sid];
+        // Filter stop times by active services if calendar is available
+        const activeSids = Object.keys(gtfsData.calendar).length > 0
+            ? getActiveServiceIds(new Date()) : null;
+        const filteredStopTimes = {};
+        if (activeSids) {
+            Object.keys(stopTimes).forEach(sid => {
+                filteredStopTimes[sid] = stopTimes[sid].filter(t => {
+                    const tid = Object.keys(tripRoutes).find(
+                        k => tripRoutes[k].route_id === t.route_id
+                    );
+                    return tid && activeSids.has(serviceIdMap[tid]);
+                });
+            });
+        } else {
+            Object.assign(filteredStopTimes, stopTimes);
+        }
+
+        Object.keys(filteredStopTimes).forEach(sid => {
+            const times = filteredStopTimes[sid];
             const byRoute = {};
             times.forEach(t => {
                 if (!byRoute[t.route_id]) byRoute[t.route_id] = { route_id: t.route_id, arrivals: [], headsign: t.headsign };
@@ -160,6 +185,7 @@ function extractAll() {
         gtfsData.routeShapes = {};
         Object.keys(tripRoutes).forEach(tid => {
             const t = tripRoutes[tid];
+            if (activeSids && !activeSids.has(serviceIdMap[tid])) return;
             if (t.shape_id) {
                 if (!gtfsData.routeShapes[t.route_id]) gtfsData.routeShapes[t.route_id] = [];
                 if (gtfsData.routeShapes[t.route_id].indexOf(t.shape_id) === -1) {
@@ -197,6 +223,24 @@ function extractAll() {
             gtfsData.shapes[sid].sort((a, b) => a.seq - b.seq);
         });
 
+        // ── Calendar parsing (calendar.txt + calendar_dates.txt) ──────────
+        gtfsData.calendar = {};
+        gtfsData.calendarDates = {};
+        parseCSV('calendar.txt', c => {
+            if (c.service_id) {
+                gtfsData.calendar[c.service_id] = {
+                    monday: c.monday, tuesday: c.tuesday, wednesday: c.wednesday,
+                    thursday: c.thursday, friday: c.friday, saturday: c.saturday, sunday: c.sunday,
+                    start_date: c.start_date, end_date: c.end_date
+                };
+            }
+        });
+        parseCSV('calendar_dates.txt', cd => {
+            if (cd.service_id && cd.date) {
+                gtfsData.calendarDates[cd.service_id + '|' + cd.date] = cd.exception_type;
+            }
+        });
+
         buildGraphs();
         buildStopRoutePositions();
         buildStopSequences();
@@ -209,6 +253,59 @@ function extractAll() {
         console.error('  GTFS error:', e.message);
     }
     try { fs.rmSync(tmpDir, { recursive: true }); } catch(e) {}
+}
+
+// ── Service Calendar ─────────────────────────────────────────────────────────
+
+function getActiveServiceIds(date) {
+    const active = new Set();
+    const dateStr = date.toISOString().substring(0, 10).replace(/-/g, '');
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayName = dayNames[date.getDay()];
+
+    Object.keys(gtfsData.calendar).forEach(serviceId => {
+        const c = gtfsData.calendar[serviceId];
+        if (c[dayName] === '1' && dateStr >= c.start_date && dateStr <= c.end_date) {
+            active.add(serviceId);
+        }
+    });
+
+    Object.keys(gtfsData.calendarDates).forEach(key => {
+        const [serviceId, excDate] = key.split('|');
+        if (excDate === dateStr) {
+            if (gtfsData.calendarDates[key] === '1') active.add(serviceId);
+            else if (gtfsData.calendarDates[key] === '2') active.delete(serviceId);
+        }
+    });
+
+    return active;
+}
+
+function recomputeActiveServices() {
+    if (Object.keys(gtfsData.calendar).length === 0) return;
+    const today = new Date();
+    const activeSids = getActiveServiceIds(today);
+
+    const trips = gtfsData.tripShapes;
+    Object.keys(gtfsData.routeShapes).forEach(routeId => {
+        gtfsData.routeShapes[routeId] = gtfsData.routeShapes[routeId].filter(shapeId => {
+            return Object.keys(trips).some(
+                tid => trips[tid] === shapeId && activeSids.has(serviceIdMap[tid])
+            );
+        });
+    });
+
+    console.log('  Service calendar recomputed: ' + activeSids.size + ' active services\n');
+}
+
+function refreshGtfsStatic() {
+    console.log('  Periodic GTFS refresh...');
+    try {
+        extractAll();
+        console.log('  GTFS refresh complete: ' + Object.keys(gtfsData.routes).length + ' routes\n');
+    } catch (e) {
+        console.error('  GTFS refresh error:', e.message);
+    }
 }
 
 // ── Directed Graph ───────────────────────────────────────────────────────────
@@ -598,7 +695,13 @@ function computeETAs() {
             if (eta > ETA_MAX_MIN) return;
             if (!etas[sid]) etas[sid] = {};
             if (!etas[sid][v.rid] || eta < etas[sid][v.rid].eta) {
-                etas[sid][v.rid] = { eta, delay: delaysCache[v.tid] || 0, vid: v.id };
+                // Confidence: compare geometric nextStopIdx with RT currentStopSequence
+                let confidence = 'high';
+                if (v.currentStopSequence != null && nextStopIdx >= 0) {
+                    const diff = Math.abs(nextStopIdx - v.currentStopSequence);
+                    if (diff > 1) confidence = 'low';
+                }
+                etas[sid][v.rid] = { eta, delay: delaysCache[v.tid] || 0, vid: v.id, confidence };
             }
         });
 
@@ -620,6 +723,13 @@ function initRealtime() {
     setInterval(saveHistSpeed, 300000);
     // Sweep stale obs buffer every 2 min
     setInterval(sweepObsBuffer, 120000);
+    // Recompute active services at midnight (every 60s check)
+    setInterval(() => {
+        const now = new Date();
+        if (now.getHours() === 0 && now.getMinutes() === 0) recomputeActiveServices();
+    }, 60000);
+    // Refresh GTFS static every 24 hours
+    setInterval(refreshGtfsStatic, 86400000);
 }
 
 // ── Server ───────────────────────────────────────────────────────────────────
@@ -638,6 +748,8 @@ http.createServer((req, res) => {
         return res.end(JSON.stringify(delaysCache));
     }
     if (url === '/api/etas') {
+        // Response: { [stopId]: { [routeId]: { eta, delay, vid, confidence } } }
+        // confidence: 'high' (geometric + RT match) | 'low' (geometric and RT disagree by >1 stop)
         res.writeHead(200, dynamicHead);
         return res.end(JSON.stringify(etasCache));
     }
