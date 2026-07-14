@@ -150,6 +150,24 @@ function extractAll() {
             gtfsData.shapeStops[shapeId] = Array.from(shapeStopsMap[shapeId]);
         });
 
+        // ── Calendar parsing (before filtering so calendar is populated) ──
+        gtfsData.calendar = {};
+        gtfsData.calendarDates = {};
+        parseCSV('calendar.txt', c => {
+            if (c.service_id) {
+                gtfsData.calendar[c.service_id] = {
+                    monday: c.monday, tuesday: c.tuesday, wednesday: c.wednesday,
+                    thursday: c.thursday, friday: c.friday, saturday: c.saturday, sunday: c.sunday,
+                    start_date: c.start_date, end_date: c.end_date
+                };
+            }
+        });
+        parseCSV('calendar_dates.txt', cd => {
+            if (cd.service_id && cd.date) {
+                gtfsData.calendarDates[cd.service_id + '|' + cd.date] = cd.exception_type;
+            }
+        });
+
         // Filter stop times by active services if calendar is available
         const activeSids = Object.keys(gtfsData.calendar).length > 0
             ? getActiveServiceIds(new Date()) : null;
@@ -221,24 +239,6 @@ function extractAll() {
 
         Object.keys(gtfsData.shapes).forEach(sid => {
             gtfsData.shapes[sid].sort((a, b) => a.seq - b.seq);
-        });
-
-        // ── Calendar parsing (calendar.txt + calendar_dates.txt) ──────────
-        gtfsData.calendar = {};
-        gtfsData.calendarDates = {};
-        parseCSV('calendar.txt', c => {
-            if (c.service_id) {
-                gtfsData.calendar[c.service_id] = {
-                    monday: c.monday, tuesday: c.tuesday, wednesday: c.wednesday,
-                    thursday: c.thursday, friday: c.friday, saturday: c.saturday, sunday: c.sunday,
-                    start_date: c.start_date, end_date: c.end_date
-                };
-            }
-        });
-        parseCSV('calendar_dates.txt', cd => {
-            if (cd.service_id && cd.date) {
-                gtfsData.calendarDates[cd.service_id + '|' + cd.date] = cd.exception_type;
-            }
         });
 
         buildGraphs();
