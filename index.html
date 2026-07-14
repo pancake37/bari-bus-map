@@ -210,6 +210,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .status-badge.delayed{background:rgba(239,68,68,0.2);color:#ef4444;border:1px solid rgba(239,68,68,0.4)}
 .status-badge.early{background:rgba(16,185,129,0.2);color:#10b981;border:1px solid rgba(16,185,129,0.4)}
 
+/* External deep-link icons */
+.ext-link{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;background:#222;color:#71717a;text-decoration:none;font-size:10px;font-weight:700;margin-left:4px;transition:all .15s;border:1px solid #333}
+.ext-link:hover{background:#3b82f6;color:#fff;border-color:#3b82f6;transform:scale(1.1)}
+.sp-h .nm-wrap{display:flex;align-items:center;flex-wrap:wrap;gap:2px}
+
 </style>
 </head>
 <body>
@@ -361,7 +366,9 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
   var v=spVehicle;
   var st=getStyle(v.rid);
   
-  spNm.innerHTML = '<span style="color:'+st.bg+';font-weight:800;font-size:1.4rem">Line '+st.name+'</span>';
+  spNm.innerHTML = '<div class="nm-wrap"><span style="color:'+st.bg+';font-weight:800;font-size:1.4rem">Line '+st.name+'</span>' +
+    '<a class="ext-link" href="https://www.google.com/maps?q='+v.lat+','+v.lon+'" target="_blank" rel="noopener" title="Apri in Google Maps">G</a>' +
+    '<a class="ext-link" href="https://moovitapp.com/?tll='+v.lat+'_'+v.lon+'" target="_blank" rel="noopener" title="Apri in Moovit">M</a></div>';
   
   var badgeClass = 'ontime', badgeText = 'In orario';
   if(v.delay > 60) {
@@ -463,7 +470,9 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
 }
 function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
   var s=spStop;
-  spNm.textContent=s.name;
+  spNm.innerHTML = '<div class="nm-wrap"><span>' + s.name + '</span>' +
+    '<a class="ext-link" href="https://www.google.com/maps?q='+s.lat+','+s.lon+'" target="_blank" rel="noopener" title="Apri in Google Maps">G</a>' +
+    '<a class="ext-link" href="https://moovitapp.com/?tll='+s.lat+'_'+s.lon+'" target="_blank" rel="noopener" title="Apri in Moovit">M</a></div>';
   spAd.textContent=s.code?s.code:'';
   var html='',routes=stopInfo[s.id]||[],etas=etasCache[s.id]||{};
   routes.forEach(function(r){
@@ -481,10 +490,14 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
     
     var livePulseHtml = '';
     if(best) {
-      livePulseHtml = '<div class="live-pulse-container">' +
-        '<div class="live-pulse"></div>' +
-        '<div class="live-text">live</div>' +
-        '</div>';
+      if(best.confidence === 'low') {
+        livePulseHtml = '<div style="display:flex;align-items:center;gap:4px;margin-top:4px"><span style="font-size:.6rem;color:#a1a1aa;font-weight:600;background:#222;padding:1px 6px;border-radius:3px">≈ estimate</span></div>';
+      } else {
+        livePulseHtml = '<div class="live-pulse-container">' +
+          '<div class="live-pulse"></div>' +
+          '<div class="live-text">live</div>' +
+          '</div>';
+      }
     }
     
     html+='<div class="sp-l" data-route="'+r.route_id+'" data-vid="'+vid+'">' +
@@ -731,12 +744,15 @@ function updateLineSplit(lat, lon, rid) {
 
 // Bus marker
 function makeIcon(rid,delay){
-  var st=getStyle(rid),di=delayInfo(delay);
+  var st=getStyle(rid),dc=getDelayColor(delay);
   return L.divIcon({
     className:'bus-marker',
     html:'<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer">'+
-      '<div style="background:'+di.c+';color:#fff;font-size:9px;font-weight:700;font-family:monospace;padding:2px 7px;border-radius:999px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,.25);line-height:1.5;min-width:24px;text-align:center;letter-spacing:.2px">'+st.name+'</div>'+
-      '<div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:5px solid '+di.c+'"></div>'+
+      '<div style="background:'+st.bg+';color:'+st.fg+';font-size:9px;font-weight:700;font-family:monospace;padding:2px 7px;border-radius:999px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,.25);line-height:1.5;min-width:24px;text-align:center;letter-spacing:.2px;display:flex;align-items:center;gap:3px">'+
+        '<span style="width:5px;height:5px;border-radius:50%;background:'+dc+';flex-shrink:0;box-shadow:0 0 3px '+dc+'"></span>'+
+        st.name+
+      '</div>'+
+      '<div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:5px solid '+dc+'"></div>'+
     '</div>',
     iconSize:[42,30],iconAnchor:[21,30]
   });
