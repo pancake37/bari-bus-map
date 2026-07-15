@@ -132,6 +132,7 @@ function extractAll() {
                 if (trip) {
                     if (!stopTimes[st.stop_id]) stopTimes[st.stop_id] = [];
                     stopTimes[st.stop_id].push({
+                        trip_id: st.trip_id,
                         route_id: trip.route_id,
                         arrival: st.arrival_time || '',
                         headsign: trip.headsign,
@@ -174,12 +175,9 @@ function extractAll() {
         const filteredStopTimes = {};
         if (activeSids) {
             Object.keys(stopTimes).forEach(sid => {
-                filteredStopTimes[sid] = stopTimes[sid].filter(t => {
-                    const tid = Object.keys(tripRoutes).find(
-                        k => tripRoutes[k].route_id === t.route_id
-                    );
-                    return tid && activeSids.has(serviceIdMap[tid]);
-                });
+                filteredStopTimes[sid] = stopTimes[sid].filter(t =>
+                    activeSids.has(serviceIdMap[t.trip_id])
+                );
             });
         } else {
             Object.assign(filteredStopTimes, stopTimes);

@@ -261,7 +261,7 @@ L.DomEvent.on(btn,'click',function(){toggleStops();});
 map.getContainer().appendChild(btn);
 
 // State
-var markers={},routeColors={},stopLayer=L.featureGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null;
+var markers={},routeColors={},stopLayer=L.featureGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null,lastSplitUpdate=0,shapeCache={};
 
 // Encoded polyline decoder
 function decodeShapePolyline(str) {
@@ -721,7 +721,6 @@ function updateLineSplit(lat, lon, rid) {
   var remaining = ll.slice(closestIdx + 1);
   remaining.unshift([lat, lon]);
   
-  console.log("[AMTAB split debug] lat:", lat, "lon:", lon, "closestIdx:", closestIdx, "traveled:", traveled.length, "remaining:", remaining.length);
   
   var st = getStyle(rid);
   var remColor = spVehicle ? getDelayColor(spVehicle.delay) : st.bg;
@@ -758,6 +757,22 @@ function makeIcon(rid,delay){
   });
 }
 
+function closestPointIndex(lat, lon, pts) {
+  var minDist = Infinity, closest = -1;
+  for (var i = 0; i < pts.length; i++) {
+    var d = (lat - pts[i].lat) * (lat - pts[i].lat) + (lon - pts[i].lon) * (lon - pts[i].lon);
+    if (d < minDist) { minDist = d; closest = i; }
+  }
+  return closest;
+}
+
+function fetchShapeForMarker(v) {
+  if (!v.shapeId) return;
+  fetch('/api/shapes?id=' + v.shapeId + '&encoded=1').then(function(r){return r.text();}).then(function(raw){
+    shapeCache[v.shapeId] = decodeShapePolyline(raw);
+  }).catch(function(){});
+}
+
 async function fetchData(){
   try{
     var [vehicles,delays,etas]=await Promise.all([
@@ -784,14 +799,60 @@ async function fetchData(){
       
       if(markers[v.id]){
         markers[v.id].setIcon(makeIcon(v.rid,v.delay));
-        markers[v.id].moveTo([v.lat, v.lon], 10000);
+        markers[v.id]._targetLatLng = {lat: v.lat, lng: v.lon};
+        if (v.shapeId && shapeCache[v.shapeId] && shapeCache[v.shapeId].length > 1) {
+          var shapePts = shapeCache[v.shapeId];
+          var oldPos = markers[v.id].getLatLng();
+          var oldIdx = closestPointIndex(oldPos.lat, oldPos.lng, shapePts);
+          var newIdx = closestPointIndex(v.lat, v.lon, shapePts);
+          if (oldIdx !== -1 && newIdx !== -1 && oldIdx !== newIdx) {
+            var step = newIdx > oldIdx ? 1 : -1;
+            var waypoints = [];
+            var totalSteps = Math.abs(newIdx - oldIdx);
+            var numStops = Math.min(5, totalSteps);
+            var stepSize = totalSteps / (numStops + 1);
+            for (var s = 1; s <= numStops; s++) {
+              var idx = Math.min(Math.max(Math.round(oldIdx + step * s * stepSize), 0), shapePts.length - 1);
+              waypoints.push([shapePts[idx].lat, shapePts[idx].lon]);
+            }
+            waypoints.push([v.lat, v.lon]);
+            var segDuration = 10000 / waypoints.length;
+            markers[v.id].moveTo(waypoints[0], segDuration);
+            for (var w = 1; w < waypoints.length; w++) {
+              markers[v.id].addLatLng(waypoints[w], segDuration);
+            }
+          } else {
+            markers[v.id].moveTo([v.lat, v.lon], 10000);
+          }
+        } else {
+          markers[v.id].moveTo([v.lat, v.lon], 10000);
+        }
+        if (!v.shapeId || !shapeCache[v.shapeId]) {
+          fetchShapeForMarker(v);
+        }
       } else {
         markers[v.id]=L.Marker.movingMarker([[v.lat, v.lon]], 10000, {icon:makeIcon(v.rid,v.delay), autostart: false});
+        markers[v.id]._targetLatLng = {lat: v.lat, lng: v.lon};
         markers[v.id].on('click', function(e){
           L.DomEvent.stopPropagation(e);
           var freshV = lastVehicles.find(function(veh){return String(veh.id) === String(v.id);}) || v;
           openVehiclePanel(freshV);
         });
+        markers[v.id].on('move', function(e){
+          if (spVehicle && String(v.id) === String(spVehicle.id) && activeShapePoints) {
+            var now = Date.now();
+            var target = this._targetLatLng;
+            var isFinal = target && Math.abs(e.latlng.lat - target.lat) < 0.00001 && Math.abs(e.latlng.lng - target.lng) < 0.00001;
+            if (!isFinal && now - lastSplitUpdate < 150) return;
+            lastSplitUpdate = now;
+            updateLineSplit(e.latlng.lat, e.latlng.lng, v.rid);
+          }
+        });
+        if (v.shapeId && !shapeCache[v.shapeId]) {
+          fetch('/api/shapes?id=' + v.shapeId + '&encoded=1').then(function(r){return r.text();}).then(function(raw){
+            shapeCache[v.shapeId] = decodeShapePolyline(raw);
+          }).catch(function(){});
+        }
       }
     });
     
