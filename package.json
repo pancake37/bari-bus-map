@@ -1,0 +1,16 @@
+{
+  "name": "bari-bus-map",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Real-time AMTAB bus map for Bari, Italy (GTFS + GTFS-RT)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "lint": "eslint server.js lib index.html"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

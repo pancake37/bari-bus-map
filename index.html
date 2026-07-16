@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bari AMTAB • Realtime Bus Map</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="/assets/vendor/leaflet.css" />
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f2f2f7;color:#1c1c1e}
@@ -231,8 +231,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <div class="sc"></div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/ewoken/Leaflet.MovingMarker@master/MovingMarker.js"></script>
+<script src="/assets/vendor/leaflet.js"></script>
+<script src="/assets/vendor/MovingMarker.js"></script>
 <script>
 window.onerror = function(message, source, lineno, colno) {
   var div = document.createElement('div');
@@ -624,7 +624,7 @@ function updateMarkerVisibilities() {
       stopData.forEach(function(st) { stopMap[st.id] = st; });
       
       var targetIdx = seq.indexOf(spVehicle.stopId);
-      console.log("[AMTAB debug] Vehicle selected:", spVehicle.id, "shapeId:", sid, "seq length:", seq.length, "vehicle stopId:", spVehicle.stopId, "targetIdx:", targetIdx);
+
       
       seq.forEach(function(stopId, idx) {
         if (targetIdx !== -1 && idx < targetIdx) return;

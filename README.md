@@ -82,17 +82,25 @@ The historical average itself is never hand-tuned — every valid GPS observatio
 
 ## API Reference
 
-| Endpoint | Returns |
-|---|---|
-| `GET /api/vehicles` | Live vehicle positions from the GTFS-RT feed |
-| `GET /api/trip-updates` | Per-trip delay data |
-| `GET /api/etas` | `{ [stopId]: { [routeId]: { eta, delay, vid, confidence } } }` |
-| `GET /api/routes` | Static route metadata |
-| `GET /api/stops` | All stop coordinates |
-| `GET /api/shapes?id=X&encoded=1` | Encoded polyline for a route shape |
-| `GET /api/stop-info` | Today's active departures per stop (calendar-filtered) |
-| `GET /api/route-shapes` | Shape IDs grouped by route |
-| `GET /api/stats` | Live vehicle count, ETA coverage, buffer sizes |
+| Endpoint | Cache | Description |
+|----------|-------|-------------|
+| `GET /api/vehicles` | no-store | Live vehicle positions from the GTFS-RT feed |
+| `GET /api/trip-updates` | no-store | Per-trip delay data |
+| `GET /api/etas` | no-store | `{ [stopId]: { [routeId]: { eta, delay, vid, confidence } } }` |
+| `GET /api/otp` | no-store | Per-route OTP `{ total, onTime, otpPct }` |
+| `GET /api/stats` | no-store | Vehicle count, buffer sizes, historical routes |
+| `GET /api/routes` | static | Route catalog |
+| `GET /api/stops` | static | All stop coordinates |
+| `GET /api/stop-info` | static | Today's active departures per stop (calendar-filtered) |
+| `GET /api/route-shapes` | static | Active shapes per route (service calendar) |
+| `GET /api/shape-stops` | static | Ordered stops per shape |
+| `GET /api/shapes?id=&encoded=1` | static | Shape geometry (JSON or encoded polyline) |
+
+### ETA confidence
+
+- **`high`** — geometric next stop's trip `stop_sequence` agrees with RT `CurrentStopSequence` within 1.
+- **`low`** — disagreement > 1 (treat ETA as approximate).
+- **`unknown`** — no RT sequence or no trip map for that trip.
 
 ## Quick Start
 
@@ -106,11 +114,38 @@ node server.js
 
 No `npm install` required for the server — it runs on Node's built-in `http`/`fs`/`child_process` modules only.
 
+```bash
+npm test    # unit tests (CSV, calendar rebuild, ZIP extract)
+```
+
+## Data Sources
+
+| Feed | URL | Type |
+|------|-----|------|
+| Vehicle Positions | `https://avl.amtab.it/WSExportGTFS_RT/api/gtfs/VechiclePosition` | GTFS-RT |
+| Trip Updates | `https://avl.amtab.it/WSExportGTFS_RT/api/gtfs/TripUpdates` | GTFS-RT |
+| Static GTFS | Local `google_transit.zip` | Static GTFS zip |
+
+Note: `VechiclePosition` is the spelling used by the AMTAB endpoint.
+
+## Security
+
+Static HTTP only serves:
+
+- `/` → `index.html`
+- `/assets/**` with safe image/js/css extensions
+
+**Not** exposed: `server.js`, `.gtfs-cache.json`, `google_transit.zip`, `data/*` observation logs, `.git/`, etc.
+
+Realtime HTTPS fetches to AMTAB use a **10s timeout** and a 5-minute last-good backup.
+
 ## ⚠️ Known Limitations
 
-- **Windows-only static GTFS extraction** — the zip archive is currently unpacked via a `PowerShell -Command Expand-Archive` call. On Linux/macOS, `extractAll()` fails silently and the server falls back to whatever is already cached. A cross-platform (zero-dependency) unzip is planned.
+- **Windows-based static GTFS extraction** — the zip archive is primarily unpacked via a `PowerShell -Command Expand-Archive` call, with a pure-JS fallback for other platforms.
 - **In-memory state only** — vehicle/ETA caches live in process memory; running multiple server instances behind a load balancer will give each instance a different view of historical speeds.
 - **No authentication or rate limiting** on the API — fine for local/single-user use, not yet hardened for public multi-tenant deployment.
+- **Client map tiles** still load from CartoCDN (network required for basemap).
+- **OTP dashboard** is available as JSON API only (no dedicated UI).
 
 ## Roadmap
 
@@ -118,9 +153,22 @@ No `npm install` required for the server — it runs on Node's built-in `http`/`
 - [ ] On-time-performance (OTP) metric computed from logged observations
 - [ ] Periodic re-fetch of `google_transit.zip` beyond the current 24h in-process refresh
 
+## Project layout
+
+```
+server.js           HTTP + GTFS + ETA + OTP
+index.html          Leaflet UI
+lib/csv.js          CSV line parser
+lib/zip.js          ZIP extract (JS + fallbacks)
+assets/vendor/      Leaflet + MovingMarker (pinned)
+data/               hist speeds + observation logs (gitignored)
+test/               node:test suite
+google_transit.zip  static GTFS (required at runtime)
+```
+
 ## License
 
-No license file is currently published in this repository — all rights reserved by default until one is added. If you intend for others to reuse this code, consider adding an [MIT](https://choosealicense.com/licenses/mit/) or similar permissive license.
+[MIT](LICENSE)
 
 ## 🙏 Data Source
 

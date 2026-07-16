@@ -5,3 +5,6 @@ node_modules/
 test2/
 test3/
 scratch/
+.DS_Store
+*.log
+
