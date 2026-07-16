@@ -12,6 +12,7 @@
     "ecmaVersion": 12,
     "sourceType": "script"
   },
+  "ignorePatterns": ["assets/vendor/"],
   "plugins": ["html"],
   "rules": {
     "no-unused-vars": "warn",
