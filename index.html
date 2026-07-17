@@ -1378,22 +1378,23 @@ async function fetchData(){
           var oldPos = markers[v.id].getLatLng();
           var oldIdx = closestPointIndex(oldPos.lat, oldPos.lng, shapePts);
           var newIdx = closestPointIndex(v.lat, v.lon, shapePts);
-          if (oldIdx !== -1 && newIdx !== -1 && oldIdx !== newIdx) {
-            var step = newIdx > oldIdx ? 1 : -1;
+          if (oldIdx !== -1 && newIdx !== -1 && newIdx > oldIdx) {
             var waypoints = [];
-            var totalSteps = Math.abs(newIdx - oldIdx);
+            var totalSteps = newIdx - oldIdx;
             var numStops = Math.min(5, totalSteps);
             var stepSize = totalSteps / (numStops + 1);
             for (var s = 1; s <= numStops; s++) {
-              var idx = Math.min(Math.max(Math.round(oldIdx + step * s * stepSize), 0), shapePts.length - 1);
+              var idx = Math.min(Math.round(oldIdx + s * stepSize), shapePts.length - 1);
               waypoints.push([shapePts[idx].lat, shapePts[idx].lon]);
             }
-            waypoints.push([v.lat, v.lon]);
+            waypoints.push([shapePts[newIdx].lat, shapePts[newIdx].lon]);
             var segDuration = 10000 / waypoints.length;
             markers[v.id].moveTo(waypoints[0], segDuration);
             for (var w = 1; w < waypoints.length; w++) {
               markers[v.id].addLatLng(waypoints[w], segDuration);
             }
+          } else if (newIdx !== -1) {
+            markers[v.id].moveTo([shapePts[newIdx].lat, shapePts[newIdx].lon], 10000);
           } else {
             markers[v.id].moveTo([v.lat, v.lon], 10000);
           }
