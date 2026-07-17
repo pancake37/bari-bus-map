@@ -71,7 +71,7 @@ function dateToGtfsStr(date) {
 
 function isAllowedStatic(relative) {
     const norm = relative.replace(/\\/g, '/');
-    if (!norm || norm === 'index.html') return true;
+    if (!norm || norm === 'index.html' || norm === 'favicon.ico') return true;
     if (norm.startsWith('assets/') && !norm.includes('..')) {
         return STATIC_ASSET_EXTS.has(path.extname(norm).toLowerCase());
     }
