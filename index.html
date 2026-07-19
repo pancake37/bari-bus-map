@@ -4,9 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Bari AMTAB • Realtime Bus Map</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/vendor/leaflet.css" />
 <style>
 :root {
@@ -764,7 +762,7 @@ body {
   <button id="theme-btn" class="theme-toggle" aria-label="Cambia tema">
     <span class="icon">☀</span>
   </button>
-  <div class="st"><div class="dot"></div><span>live</span></div>
+  <div id="feed-status" class="st"><div class="dot"></div><span>live</span></div>
 </div>
 </div>
 <div id="map"></div>
@@ -782,7 +780,7 @@ body {
 window.onerror = function(message, source, lineno, colno) {
   var div = document.createElement('div');
   div.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(220,38,38,0.9);color:#fff;padding:12px 20px;border-radius:8px;font-size:12px;font-family:monospace;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.3);max-width:90%;overflow-x:auto;';
-  div.innerHTML = '<strong>Client-side error:</strong><br>' + message + ' at ' + (source ? source.split('/').pop() : 'unknown') + ':' + lineno + ':' + colno;
+  div.textContent = 'Client-side error: ' + message + ' at ' + (source ? source.split('/').pop() : 'unknown') + ':' + lineno + ':' + colno;
   document.body.appendChild(div);
 };
 var map = L.map('map',{center:[41.1055,16.8405],zoom:12,preferCanvas:true,zoomControl:true});
@@ -867,13 +865,14 @@ function genColor(s){
   for(var i=0;i<s.length;i++)h=((h<<5)-h)+s.charCodeAt(i)|0;
   return 'hsl('+(Math.abs(h)%360)+',60%,52%)';
 }
+function escapeHtml(value){
+  return String(value == null ? '' : value).replace(/[&<>'"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c];
+  });
+}
 function getStyle(rid){
   var r=routeColors[rid];
   return r?{bg:r._bg,fg:r._fg,name:r.route_short_name||rid}:{bg:genColor(rid),fg:'#fff',name:rid};
-}
-function delayInfo(d){
-  d=parseInt(d)||0;
-  return d<=0?{c:'#059669',t:'On time'}:d<=600?{c:'#d97706',t:Math.round(d/60)+' min'}:{c:'#dc2626',t:Math.round(d/60)+' min'};
 }
 
 // Sidebar
@@ -919,7 +918,7 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
   var v=spVehicle;
   var st=getStyle(v.rid);
   
-  spNm.innerHTML = '<div class="nm-wrap"><span style="color:'+st.bg+';font-weight:800;font-size:1.4rem">Line '+st.name+'</span>' +
+  spNm.innerHTML = '<div class="nm-wrap"><span style="color:'+st.bg+';font-weight:800;font-size:1.4rem">Line '+escapeHtml(st.name)+'</span>' +
     '<a class="ext-link" href="https://www.google.com/maps?q='+v.lat+','+v.lon+'" target="_blank" rel="noopener" title="Apri in Google Maps">G</a>' +
     '<a class="ext-link" href="https://moovitapp.com/?tll='+v.lat+'_'+v.lon+'" target="_blank" rel="noopener" title="Apri in Moovit">M</a></div>';
   
@@ -938,7 +937,7 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
   var seq = sid ? (shapeStops[sid] || []) : [];
   
   if(seq.length > 0) {
-    fetch('/api/shapes?id=' + sid + '&encoded=1')
+    fetch('/api/shapes?id=' + encodeURIComponent(sid) + '&encoded=1')
       .then(function(r){return r.text();})
       .then(function(raw){var pts = decodeShapePolyline(raw);
         if(!pts || !pts.length) return;
@@ -1009,7 +1008,7 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
             '<div class="line" style="'+lineStyle+'"></div>' +
             '<div class="dot" style="'+dotStyle+'"></div>' +
             '</div>' +
-            '<div class="name-col">' + s.name + '</div>' +
+            '<div class="name-col">' + escapeHtml(s.name) + '</div>' +
             '<div class="eta-col">' + (isPassed ? 'passato' : etaText) + '</div>' +
             '</div>';
         });
@@ -1023,7 +1022,7 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
 }
 function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
   var s=spStop;
-  spNm.innerHTML = '<div class="nm-wrap"><span>' + s.name + '</span>' +
+  spNm.innerHTML = '<div class="nm-wrap"><span>' + escapeHtml(s.name) + '</span>' +
     '<a class="ext-link" href="https://www.google.com/maps?q='+s.lat+','+s.lon+'" target="_blank" rel="noopener" title="Apri in Google Maps">G</a>' +
     '<a class="ext-link" href="https://moovitapp.com/?tll='+s.lat+'_'+s.lon+'" target="_blank" rel="noopener" title="Apri in Moovit">M</a></div>';
   spAd.textContent=s.code?s.code:'';
@@ -1042,6 +1041,8 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
       } else if(best.delay<-60) {
         cardClass += ' sp-l--early';
         delayHtml='<div class="delay-badge early">'+Math.round(-best.delay/60)+'\' anticipo</div>';
+      } else if(best.confidence === 'unknown') {
+        livePulseHtml = '<div style="display:flex;align-items:center;gap:4px;margin-top:4px"><span style="font-size:.6rem;color:var(--color-muted);font-weight:600;background:var(--color-paper-2);padding:2px 8px;border-radius:4px;border:1px solid var(--color-rule)">dati non verificati</span></div>';
       } else {
         cardClass += ' sp-l--ontime';
       }
@@ -1059,12 +1060,12 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
       }
     }
     
-    html+='<div class="'+cardClass+'" data-route="'+r.route_id+'" data-vid="'+vid+'">' +
+    html+='<div class="'+cardClass+'" data-route="'+escapeHtml(r.route_id)+'" data-vid="'+escapeHtml(vid)+'">' +
       '<div class="left-col">' +
-        '<div class="route-badge" style="background:'+st.bg+';color:'+st.fg+'">'+st.name+'</div>' +
+        '<div class="route-badge" style="background:'+st.bg+';color:'+st.fg+'">'+escapeHtml(st.name)+'</div>' +
         '<div class="info-col">' +
-          '<div class="dest">'+(r.headsign ? r.headsign : 'Linea '+st.name)+'</div>' +
-          '<div class="stop-sub">'+s.name+'</div>' +
+          '<div class="dest">'+escapeHtml(r.headsign ? r.headsign : 'Linea '+st.name)+'</div>' +
+          '<div class="stop-sub">'+escapeHtml(s.name)+'</div>' +
         '</div>' +
       '</div>' +
       '<div class="right-col">' +
@@ -1107,7 +1108,7 @@ function showRouteLine(rid, vid){
   
   if(!sid) return;
   
-  fetch('/api/shapes?id=' + sid + '&encoded=1')
+  fetch('/api/shapes?id=' + encodeURIComponent(sid) + '&encoded=1')
     .then(function(r){return r.text();})
     .then(function(raw){var pts = decodeShapePolyline(raw);
       if(!pts || !pts.length) return;
@@ -1317,7 +1318,7 @@ function makeIcon(rid,delay){
     html:'<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer">'+
       '<div style="background:'+st.bg+';color:'+st.fg+';font-size:9px;font-weight:700;font-family:monospace;padding:2px 7px;border-radius:999px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,.25);line-height:1.5;min-width:24px;text-align:center;letter-spacing:.2px;display:flex;align-items:center;gap:3px">'+
         '<span style="width:5px;height:5px;border-radius:50%;background:'+dc+';flex-shrink:0;box-shadow:0 0 3px '+dc+'"></span>'+
-        st.name+
+        escapeHtml(st.name)+
       '</div>'+
       '<div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:5px solid '+dc+'"></div>'+
     '</div>',
@@ -1336,17 +1337,27 @@ function closestPointIndex(lat, lon, pts) {
 
 function fetchShapeForMarker(v) {
   if (!v.shapeId) return;
-  fetch('/api/shapes?id=' + v.shapeId + '&encoded=1').then(function(r){return r.text();}).then(function(raw){
+  fetch('/api/shapes?id=' + encodeURIComponent(v.shapeId) + '&encoded=1').then(function(r){return r.text();}).then(function(raw){
     shapeCache[v.shapeId] = decodeShapePolyline(raw);
   }).catch(function(){});
 }
 
+function renderFeedStatus(status) {
+  var el = document.getElementById('feed-status');
+  if (!el || !status) return;
+  var stale = status.vehiclesStale || status.tripUpdatesStale;
+  el.querySelector('span').textContent = stale ? 'dati in cache' : 'live';
+  el.title = stale ? 'Il feed AMTAB non risponde: vengono mostrati gli ultimi dati ricevuti.' : 'Dati in tempo reale';
+  el.style.opacity = stale ? '.65' : '1';
+}
+
 async function fetchData(){
   try{
-    var [vehicles,delays,etas]=await Promise.all([
+    var [vehicles,delays,etas,status]=await Promise.all([
       fetch('/api/vehicles').then(function(r){return r.json();}),
       fetch('/api/trip-updates').then(function(r){return r.json();}),
-      fetch('/api/etas').then(function(r){return r.json();})
+      fetch('/api/etas').then(function(r){return r.json();}),
+      fetch('/api/status').then(function(r){return r.json();})
     ]);
     vehicles.forEach(function(v){v.delay=delays[v.tid]||0;});
     if(spVehicle) {
@@ -1363,6 +1374,7 @@ async function fetchData(){
     }
     lastVehicles=vehicles;
     etasCache=etas;
+    renderFeedStatus(status);
     renderStopPanel();
     renderVehiclePanel();
     
@@ -1423,7 +1435,7 @@ async function fetchData(){
           }
         });
         if (v.shapeId && !shapeCache[v.shapeId]) {
-          fetch('/api/shapes?id=' + v.shapeId + '&encoded=1').then(function(r){return r.text();}).then(function(raw){
+          fetch('/api/shapes?id=' + encodeURIComponent(v.shapeId) + '&encoded=1').then(function(r){return r.text();}).then(function(raw){
             shapeCache[v.shapeId] = decodeShapePolyline(raw);
           }).catch(function(){});
         }

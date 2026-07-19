@@ -22,3 +22,6 @@ jobs:
 
       - name: Run ESLint
         run: npx eslint . --ext .js,.html
+
+      - name: Run unit tests
+        run: npm test

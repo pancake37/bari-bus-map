@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const { parseCSVLine } = require('./lib/csv');
 const { extractZip } = require('./lib/zip');
+const { dateToGtfsStr, getActiveServiceIds, hasServiceCalendar, rebuildRouteShapes, rebuildStopInfo } = require('./lib/calendar');
 
 const PORT = 3000;
 const GTFS_ZIP = path.join(__dirname, 'google_transit.zip');
@@ -14,6 +15,7 @@ const HIST_FILE = path.join(DATA_DIR, 'hist-speed.json');
 
 const AMTAB_VEH = 'https://avl.amtab.it/WSExportGTFS_RT/api/gtfs/VechiclePosition';
 const AMTAB_TRIP = 'https://avl.amtab.it/WSExportGTFS_RT/api/gtfs/TripUpdates';
+const GTFS_TIME_ZONE = 'Europe/Rome';
 
 const RUSH_START = 6, RUSH_END = 10, RUSH_START2 = 15, RUSH_END2 = 19;
 const FAR_THRESHOLD_M = 250;
@@ -24,7 +26,7 @@ const MIN_OBS_SPEED = 10;
 const RUSH_FACTOR = 0.85;
 const ETA_MAX_MIN = 120;
 const FETCH_TIMEOUT_MS = 10000;
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const CONFIDENCE_SEQ_THRESHOLD = 1;
 
 const MIME = {
@@ -61,12 +63,9 @@ function emptyGtfsData() {
         stopRoutePos: {},
         stopSequence: {},
         calendar: {},
-        calendarDates: {}
+        calendarDates: {},
+        stopTimes: {}
     };
-}
-
-function dateToGtfsStr(date) {
-    return date.toISOString().substring(0, 10).replace(/-/g, '');
 }
 
 function isAllowedStatic(relative) {
@@ -82,7 +81,9 @@ let gtfsData = emptyGtfsData();
 let vehiclesCache = [], delaysCache = {}, etasCache = {}, otpCache = {};
 let histSpeed = {}, obsBuffer = [], obsCount = 0, logStream = null, logDate = '';
 // Graceful fallback backup
-let lastVehiclesBackup = null, lastDelaysBackup = null, lastBackupTime = 0;
+let lastVehiclesBackup = null, lastDelaysBackup = null;
+let pollInProgress = false;
+let realtimeStatus = { vehiclesUpdatedAt: null, tripUpdatesUpdatedAt: null, vehiclesStale: true, tripUpdatesStale: true };
 const BACKUP_TTL_MS = 300000; // 5 min
 const MAX_OBS_BUFFER_SIZE = 10000;
 // Service calendar (populated during extractAll; also mirrored in gtfsData.serviceIdMap)
@@ -106,6 +107,7 @@ function loadCache() {
             gtfsData.shapeStops = gtfsData.shapeStops || {};
             gtfsData.calendar = gtfsData.calendar || {};
             gtfsData.calendarDates = gtfsData.calendarDates || {};
+            gtfsData.stopTimes = gtfsData.stopTimes || {};
             if (gtfsData.cacheVersion !== CACHE_VERSION) {
                 console.log('  Cache outdated (version ' + gtfsData.cacheVersion + ' → ' + CACHE_VERSION + '), re-extracting...');
                 return false;
@@ -120,6 +122,10 @@ function loadCache() {
             }
             if (!gtfsData.tripRouteIds || Object.keys(gtfsData.tripRouteIds).length === 0) {
                 console.log('  Cache outdated (missing tripRouteIds), re-extracting...');
+                return false;
+            }
+            if (Object.keys(gtfsData.stopTimes).length === 0) {
+                console.log('  Cache outdated (missing stopTimes), re-extracting...');
                 return false;
             }
             serviceIdMap = gtfsData.serviceIdMap;
@@ -218,6 +224,7 @@ function extractAll() {
         Object.keys(shapeStopsMap).forEach(shapeId => {
             gtfsData.shapeStops[shapeId] = Array.from(shapeStopsMap[shapeId]);
         });
+        gtfsData.stopTimes = stopTimes;
 
         // ── Calendar parsing (before filtering so calendar is populated) ──
         parseCSV('calendar.txt', c => {
@@ -233,35 +240,6 @@ function extractAll() {
             if (cd.service_id && cd.date) {
                 gtfsData.calendarDates[cd.service_id + '|' + cd.date] = cd.exception_type;
             }
-        });
-
-        // Filter stop times by active services if calendar is available
-        const activeSids = Object.keys(gtfsData.calendar).length > 0
-            ? getActiveServiceIds(new Date()) : null;
-        const filteredStopTimes = {};
-        if (activeSids) {
-            Object.keys(stopTimes).forEach(sid => {
-                filteredStopTimes[sid] = stopTimes[sid].filter(t =>
-                    activeSids.has(serviceIdMap[t.trip_id])
-                );
-            });
-        } else {
-            Object.assign(filteredStopTimes, stopTimes);
-        }
-
-        Object.keys(filteredStopTimes).forEach(sid => {
-            const times = filteredStopTimes[sid];
-            const byRoute = {};
-            times.forEach(t => {
-                if (!byRoute[t.route_id]) byRoute[t.route_id] = { route_id: t.route_id, arrivals: [], headsign: t.headsign };
-                if (t.arrival) byRoute[t.route_id].arrivals.push(t.arrival);
-            });
-            Object.keys(byRoute).forEach(rid => {
-                byRoute[rid].arrivals.sort();
-                byRoute[rid].next = byRoute[rid].arrivals.slice(0, 3);
-                delete byRoute[rid].arrivals;
-            });
-            gtfsData.stopInfo[sid] = Object.values(byRoute);
         });
 
         // Full trip index is kept (tripShapes + tripRouteIds + serviceIdMap);
@@ -313,30 +291,6 @@ function extractAll() {
 
 // ── Service Calendar ─────────────────────────────────────────────────────────
 
-function getActiveServiceIds(date) {
-    const active = new Set();
-    const dateStr = dateToGtfsStr(date);
-    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    const dayName = dayNames[date.getDay()];
-
-    Object.keys(gtfsData.calendar).forEach(serviceId => {
-        const c = gtfsData.calendar[serviceId];
-        if (c[dayName] === '1' && dateStr >= c.start_date && dateStr <= c.end_date) {
-            active.add(serviceId);
-        }
-    });
-
-    Object.keys(gtfsData.calendarDates).forEach(key => {
-        const [serviceId, excDate] = key.split('|');
-        if (excDate === dateStr) {
-            if (gtfsData.calendarDates[key] === '1') active.add(serviceId);
-            else if (gtfsData.calendarDates[key] === '2') active.delete(serviceId);
-        }
-    });
-
-    return active;
-}
-
 /**
  * Rebuild routeShapes from the full trip index (tripShapes + tripRouteIds + serviceIdMap).
  * Never mutates the source index — only replaces the daily filtered view.
@@ -344,33 +298,20 @@ function getActiveServiceIds(date) {
  */
 function recomputeActiveServices(force) {
     const today = new Date();
-    const dateStr = dateToGtfsStr(today);
+    const dateStr = dateToGtfsStr(today, GTFS_TIME_ZONE);
     if (!force && lastServiceDate === dateStr) return;
 
-    const hasCalendar = Object.keys(gtfsData.calendar || {}).length > 0;
-    const activeSids = hasCalendar ? getActiveServiceIds(today) : null;
+    const activeSids = hasServiceCalendar(gtfsData.calendar, gtfsData.calendarDates)
+        ? getActiveServiceIds(gtfsData.calendar, gtfsData.calendarDates, today, GTFS_TIME_ZONE) : null;
     const sidMap = gtfsData.serviceIdMap || serviceIdMap;
     const tripRouteIds = gtfsData.tripRouteIds || {};
     const tripShapes = gtfsData.tripShapes || {};
-    const rs = {};
-
-    Object.keys(tripShapes).forEach(tid => {
-        if (activeSids) {
-            const sid = sidMap[tid];
-            if (!sid || !activeSids.has(sid)) return;
-        }
-        const shapeId = tripShapes[tid];
-        const routeId = tripRouteIds[tid];
-        if (!shapeId || !routeId) return;
-        if (!rs[routeId]) rs[routeId] = [];
-        if (rs[routeId].indexOf(shapeId) === -1) rs[routeId].push(shapeId);
-    });
-
-    gtfsData.routeShapes = rs;
+    gtfsData.routeShapes = rebuildRouteShapes(tripShapes, tripRouteIds, sidMap, activeSids);
+    gtfsData.stopInfo = rebuildStopInfo(gtfsData.stopTimes, sidMap, activeSids);
     lastServiceDate = dateStr;
     const nActive = activeSids ? activeSids.size : Object.keys(sidMap).length;
     console.log('  Service calendar recomputed: ' + nActive + ' active services, ' +
-        Object.keys(rs).length + ' routes with shapes (date ' + dateStr + ')\n');
+        Object.keys(gtfsData.routeShapes).length + ' routes with shapes (date ' + dateStr + ')\n');
 }
 
 function refreshGtfsStatic() {
@@ -474,26 +415,6 @@ function encodeShapePolyline(pts) {
         prevLat = lat; prevLon = lon;
     }
     return out;
-}
-
-function decodePolylineSigned(val) {
-    return val & 1 ? ~(val >> 1) : val >> 1;
-}
-
-function decodeShapePolyline(str) {
-    const pts = [];
-    let prevLat = 0, prevLon = 0, idx = 0;
-    const PREC = 100000;
-    while (idx < str.length) {
-        let res = 0, shift = 0, byte;
-        do { byte = str.charCodeAt(idx++) - 63; res |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
-        prevLat += decodePolylineSigned(res);
-        res = 0; shift = 0;
-        do { byte = str.charCodeAt(idx++) - 63; res |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
-        prevLon += decodePolylineSigned(res);
-        pts.push({ lat: prevLat / PREC, lon: prevLon / PREC });
-    }
-    return pts;
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
@@ -670,8 +591,17 @@ function computeOTP() {
 }
 
 function pollRealtime() {
+    if (pollInProgress) return;
+    pollInProgress = true;
     let pending = 2;
-    function done() { if (--pending === 0) { otpCache = computeOTP(); computeETAs(); flushLogs(); sweepObsBuffer(); } }
+    function done() {
+        if (--pending !== 0) return;
+        otpCache = computeOTP();
+        computeETAs();
+        flushLogs();
+        sweepObsBuffer();
+        pollInProgress = false;
+    }
 
     fetchJSON(AMTAB_VEH, (err, vehData) => {
         if (!err && vehData) {
@@ -699,10 +629,16 @@ function pollRealtime() {
             });
             vehiclesCache = vehicles;
             lastVehiclesBackup = { data: vehicles, ts: Date.now() };
+            realtimeStatus.vehiclesUpdatedAt = lastVehiclesBackup.ts;
+            realtimeStatus.vehiclesStale = false;
         } else {
             if (err) warnFetch(err);
             if (lastVehiclesBackup && (Date.now() - lastVehiclesBackup.ts) < BACKUP_TTL_MS) {
                 vehiclesCache = lastVehiclesBackup.data;
+                realtimeStatus.vehiclesStale = true;
+            } else {
+                vehiclesCache = [];
+                realtimeStatus.vehiclesStale = true;
             }
         }
         done();
@@ -720,10 +656,16 @@ function pollRealtime() {
             });
             delaysCache = d;
             lastDelaysBackup = { data: d, ts: Date.now() };
+            realtimeStatus.tripUpdatesUpdatedAt = lastDelaysBackup.ts;
+            realtimeStatus.tripUpdatesStale = false;
         } else {
             if (err) warnFetch(err);
             if (lastDelaysBackup && (Date.now() - lastDelaysBackup.ts) < BACKUP_TTL_MS) {
                 delaysCache = lastDelaysBackup.data;
+                realtimeStatus.tripUpdatesStale = true;
+            } else {
+                delaysCache = {};
+                realtimeStatus.tripUpdatesStale = true;
             }
         }
         done();
@@ -928,6 +870,10 @@ http.createServer((req, res) => {
             histRoutes: Object.keys(histSpeed).length,
             logDate
         }));
+    }
+    if (url === '/api/status') {
+        res.writeHead(200, dynamicHead);
+        return res.end(JSON.stringify(Object.assign({ pollInProgress }, realtimeStatus)));
     }
 
     const pathname = new URL(url, 'http://localhost').pathname;

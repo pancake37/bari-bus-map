@@ -89,6 +89,7 @@ The historical average itself is never hand-tuned — every valid GPS observatio
 | `GET /api/etas` | no-store | `{ [stopId]: { [routeId]: { eta, delay, vid, confidence } } }` |
 | `GET /api/otp` | no-store | Per-route OTP `{ total, onTime, otpPct }` |
 | `GET /api/stats` | no-store | Vehicle count, buffer sizes, historical routes |
+| `GET /api/status` | no-store | RT-feed freshness and cached-data flags |
 | `GET /api/routes` | static | Route catalog |
 | `GET /api/stops` | static | All stop coordinates |
 | `GET /api/stop-info` | static | Today's active departures per stop (calendar-filtered) |
@@ -138,6 +139,12 @@ Static HTTP only serves:
 **Not** exposed: `server.js`, `.gtfs-cache.json`, `google_transit.zip`, `data/*` observation logs, `.git/`, etc.
 
 Realtime HTTPS fetches to AMTAB use a **10s timeout** and a 5-minute last-good backup.
+
+The server prevents overlapping polls. When it has to use a backup, `/api/status` and the map header report cached data instead of presenting it as live.
+
+GTFS service selection supports both the usual `calendar.txt` rules and feeds that define service exclusively through `calendar_dates.txt`; stop departures and active shapes are rebuilt together at the local calendar-day boundary.
+
+The included ZIP reader is cross-platform and uses pure JavaScript for stored and deflated archives, with command-line fallbacks only when necessary.
 
 ## ⚠️ Known Limitations
 
