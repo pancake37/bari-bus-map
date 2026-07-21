@@ -309,9 +309,13 @@ function recomputeActiveServices(force) {
     gtfsData.routeShapes = rebuildRouteShapes(tripShapes, tripRouteIds, sidMap, activeSids);
     gtfsData.stopInfo = rebuildStopInfo(gtfsData.stopTimes, sidMap, activeSids);
     lastServiceDate = dateStr;
-    const nActive = activeSids ? activeSids.size : Object.keys(sidMap).length;
-    console.log('  Service calendar recomputed: ' + nActive + ' active services, ' +
-        Object.keys(gtfsData.routeShapes).length + ' routes with shapes (date ' + dateStr + ')\n');
+    const nActive = activeSids ? activeSids.size : null;
+    const label = nActive !== null
+        ? nActive + ' active services'
+        : Object.keys(sidMap).length + ' trips (no calendar data available)';
+    console.log('  Service calendar recomputed: ' + label + ', ' +
+        Object.keys(gtfsData.routeShapes).length + ' routes with shapes' +
+        ' (date ' + dateStr + ')\n');
 }
 
 function refreshGtfsStatic() {
