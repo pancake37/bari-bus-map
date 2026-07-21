@@ -31,7 +31,8 @@ No React. No build step. No database. Just `node server.js` and a browser tab.
 | **Road-snapped animation** | Buses animate along the actual route geometry between GPS updates (via waypoint interpolation), instead of cutting straight through city blocks. |
 | **Self-learning speed model** | Historical average speed per route/time-block updates online from every observed GPS ping — no offline training step, no static lookup table. |
 | **Graceful degradation** | If the AMTAB real-time feed hiccups, the server serves a 5-minute-TTL backup instead of an empty map. |
-| **Minimalist dark map** | CartoDB Dark Matter tiles, POIs stripped, so roads/stops/vehicles are the only thing competing for attention. |
+| **Light/dark theme** | Toggles both the UI chrome and the underlying CartoDB basemap tiles; choice persists across sessions via `localStorage`. |
+| **Minimalist map design** | POIs stripped from the basemap in both themes, so roads/stops/vehicles stay the only thing competing for attention. |
 | **Lazy-loaded shapes** | The ~13 MB of route geometry is fetched per-route only on click, keeping cold start under 50 ms. |
 | **One-tap deep links** | Stop and vehicle panels link straight out to Google Maps / Moovit by coordinates. |
 
@@ -57,7 +58,7 @@ flowchart TB
     end
 
     subgraph Frontend["index.html — Leaflet.js, no build step"]
-        Map["Dark Leaflet Map"]
+        Map["Leaflet Map (light/dark toggle)"]
         Markers["Road-snapped vehicle markers"]
         Panel["Stop / Vehicle side panels"]
         Line["Traveled / remaining route split"]
@@ -148,7 +149,7 @@ The included ZIP reader is cross-platform and uses pure JavaScript for stored an
 
 ## ⚠️ Known Limitations
 
-- **Windows-based static GTFS extraction** — the zip archive is primarily unpacked via a `PowerShell -Command Expand-Archive` call, with a pure-JS fallback for other platforms.
+- **PowerShell fallback still present** — GTFS ZIP extraction is pure-JS first (works on any OS), with an `unzip` CLI fallback, and `PowerShell Expand-Archive` only as a last resort on Windows if both prior methods fail on an unusual archive. It's dead code on Linux/macOS and should trigger a proper error report if it's ever hit.
 - **In-memory state only** — vehicle/ETA caches live in process memory; running multiple server instances behind a load balancer will give each instance a different view of historical speeds.
 - **No authentication or rate limiting** on the API — fine for local/single-user use, not yet hardened for public multi-tenant deployment.
 - **Client map tiles** still load from CartoCDN (network required for basemap).
@@ -156,20 +157,22 @@ The included ZIP reader is cross-platform and uses pure JavaScript for stored an
 
 ## Roadmap
 
-- [ ] Cross-platform static GTFS extraction (drop the PowerShell dependency)
-- [ ] On-time-performance (OTP) metric computed from logged observations
-- [ ] Periodic re-fetch of `google_transit.zip` beyond the current 24h in-process refresh
+- [ ] Automatic re-download of `google_transit.zip` from AMTAB (the current 24h refresh only re-parses the local copy already on disk — it doesn't fetch a new one over the network)
+- [ ] Search bar for finding a stop or line by name/number, instead of only clicking on the map
+- [ ] Favorite/starred stops, saved across sessions
 
 ## Project layout
 
 ```
 server.js           HTTP + GTFS + ETA + OTP
-index.html          Leaflet UI
+index.html          Leaflet UI, light/dark theme, road-snapped animation
 lib/csv.js          CSV line parser
-lib/zip.js          ZIP extract (JS + fallbacks)
-assets/vendor/      Leaflet + MovingMarker (pinned)
+lib/zip.js          ZIP extract (JS-first, with CLI/PowerShell fallbacks)
+lib/calendar.js     Service-calendar logic (timezone-aware, calendar_dates-only feeds)
+assets/vendor/      Leaflet + MovingMarker (pinned to a specific commit) + marker icons
+assets/favicon.svg  Favicon
 data/               hist speeds + observation logs (gitignored)
-test/               node:test suite
+test/               node:test suite (calendar, csv, zip)
 google_transit.zip  static GTFS (required at runtime)
 ```
 
