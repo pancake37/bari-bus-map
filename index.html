@@ -1029,31 +1029,30 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
   var html='',routes=stopInfo[s.id]||[],etas=etasCache[s.id]||{};
   routes.forEach(function(r){
     var st=getStyle(r.route_id),best=etas[r.route_id];
-    var disp='&mdash;',delayHtml='',vid='';
+    var disp='&mdash;',delayHtml='',confidenceHtml='',vid='';
     var cardClass = 'sp-l';
     
     if(best){
       disp=best.eta;
       vid=best.vid;
+      // Delay drives card color + ritardo/anticipo text (independent of confidence)
       if(best.delay>60) {
         cardClass += ' sp-l--delayed';
         delayHtml='<div class="delay-badge delayed">'+Math.round(best.delay/60)+'\' ritardo</div>';
       } else if(best.delay<-60) {
         cardClass += ' sp-l--early';
         delayHtml='<div class="delay-badge early">'+Math.round(-best.delay/60)+'\' anticipo</div>';
-      } else if(best.confidence === 'unknown') {
-        livePulseHtml = '<div style="display:flex;align-items:center;gap:4px;margin-top:4px"><span style="font-size:.6rem;color:var(--color-muted);font-weight:600;background:var(--color-paper-2);padding:2px 8px;border-radius:4px;border:1px solid var(--color-rule)">dati non verificati</span></div>';
       } else {
         cardClass += ' sp-l--ontime';
       }
-    }
-    
-    var livePulseHtml = '';
-    if(best) {
+      // Confidence badge independent of delay
       if(best.confidence === 'low') {
-        livePulseHtml = '<div style="display:flex;align-items:center;gap:4px;margin-top:4px"><span style="font-size:.6rem;color:var(--color-muted);font-weight:600;background:var(--color-paper-2);padding:2px 8px;border-radius:4px;border:1px solid var(--color-rule)">≈ stima</span></div>';
+        confidenceHtml = '<div style="display:flex;align-items:center;gap:4px;margin-top:4px"><span style="font-size:.6rem;color:var(--color-muted);font-weight:600;background:var(--color-paper-2);padding:2px 8px;border-radius:4px;border:1px solid var(--color-rule)">≈ stima</span></div>';
+      } else if(best.confidence === 'unknown') {
+        confidenceHtml = '<div style="display:flex;align-items:center;gap:4px;margin-top:4px"><span style="font-size:.6rem;color:var(--color-muted);font-weight:600;background:var(--color-paper-2);padding:2px 8px;border-radius:4px;border:1px solid var(--color-rule)">dati non verificati</span></div>';
       } else {
-        livePulseHtml = '<div class="live-pulse-container">' +
+        // high or missing → live pulse
+        confidenceHtml = '<div class="live-pulse-container">' +
           '<div class="live-pulse"></div>' +
           '<div class="live-text">live</div>' +
           '</div>';
@@ -1073,7 +1072,7 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
           '<span class="min-val">'+disp+'</span>' +
           '<span class="eta-unit">&nbsp;min</span>' +
         '</div>' +
-        (livePulseHtml || delayHtml) +
+        delayHtml + confidenceHtml +
       '</div>' +
     '</div>';
   });
