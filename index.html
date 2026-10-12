@@ -575,6 +575,11 @@ body {
   color: var(--color-accent-2-deep);
   border: 1px solid oklch(66% 0.18 235 / 0.25);
 }
+.sp-l .delay-badge.unknown {
+  background: var(--color-paper-2);
+  color: var(--color-muted);
+  border: 1px solid var(--color-rule);
+}
 
 @media(max-width:640px) {
   #sp {
@@ -716,6 +721,27 @@ body {
   color: var(--color-mint-deep);
   border: 1px solid oklch(80% 0.16 150 / 0.25);
 }
+.status-badge.unknown {
+  background: var(--color-paper-2);
+  color: var(--color-muted);
+  border: 1px solid var(--color-rule);
+}
+.sched-line {
+  font-family: var(--font-label);
+  font-size: 0.68rem;
+  color: var(--color-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.sched-line strong { color: var(--color-ink-2); font-weight: 700; }
+.stop-row .sched-sub {
+  font-family: var(--font-label);
+  font-size: 0.65rem;
+  color: var(--color-muted);
+  margin-top: 2px;
+  text-align: right;
+  line-height: 1.4;
+}
 
 /* Deep link spring buttons */
 .ext-link {
@@ -812,6 +838,37 @@ map.getContainer().appendChild(btn);
 
 // State
 var markers={},routeColors={},stopLayer=L.featureGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null,lastSplitUpdate=0,shapeCache={},justOpened=false;
+var tripDetailCache={},tripTimetableCache={};
+
+// Schedule vs realtime helpers (vehicle panel)
+function delayState(delay){
+  if(delay == null || isNaN(delay)) return 'unknown';
+  if(delay > 60) return 'delayed';
+  if(delay < -60) return 'early';
+  return 'ontime';
+}
+function delayLabel(delay){
+  var s = delayState(delay);
+  if(s === 'delayed') return Math.round(delay/60) + "' ritardo";
+  if(s === 'early') return Math.round(-delay/60) + "' anticipo";
+  if(s === 'ontime') return 'In orario';
+  return 'Ritardo sconosciuto';
+}
+function shortTime(hhmmss){
+  if(!hhmmss) return null;
+  var p = String(hhmmss).split(':');
+  if(p.length < 2) return null;
+  var h = parseInt(p[0],10);
+  if(isNaN(h)) return null;
+  // GTFS times may exceed 24h (e.g. 25:10:00) → wrap to clock time
+  h = ((h % 24) + 24) % 24;
+  return (h < 10 ? '0' + h : '' + h) + ':' + p[1];
+}
+function clockFromEpoch(sec){
+  if(sec == null || isNaN(sec)) return null;
+  try { return new Date(sec * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false}); }
+  catch(e){ return null; }
+}
 
 // Encoded polyline decoder
 function decodeShapePolyline(str) {
@@ -917,6 +974,21 @@ function openVehiclePanel(v){
   document.getElementById('ts').textContent='';
   showRouteLine(v.rid, v.id);
   updateMarkerVisibilities();
+  // Load per-trip realtime + static timetable for schedule comparison.
+  if(v.tid){
+    if(!tripDetailCache[v.tid]){
+      fetch('/api/trip-detail?tripId=' + encodeURIComponent(v.tid))
+        .then(function(r){return r.json();})
+        .then(function(d){ tripDetailCache[v.tid] = d; renderVehiclePanel(); })
+        .catch(function(){});
+    }
+    if(!tripTimetableCache[v.tid]){
+      fetch('/api/trip-timetable?tripId=' + encodeURIComponent(v.tid))
+        .then(function(r){return r.json();})
+        .then(function(d){ tripTimetableCache[v.tid] = d; renderVehiclePanel(); })
+        .catch(function(){});
+    }
+  }
 }
 function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))return;
   var v=spVehicle;
@@ -926,15 +998,28 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
     '<a class="ext-link" href="https://www.google.com/maps?q='+v.lat+','+v.lon+'" target="_blank" rel="noopener" title="Apri in Google Maps">G</a>' +
     '<a class="ext-link" href="https://moovitapp.com/?tll='+v.lat+'_'+v.lon+'" target="_blank" rel="noopener" title="Apri in Moovit">M</a></div>';
   
-  var badgeClass = 'ontime', badgeText = 'In orario';
-  if(v.delay > 60) {
-    badgeClass = 'delayed';
-    badgeText = Math.round(v.delay/60) + '\' ritardo';
-  } else if(v.delay < -60) {
-    badgeClass = 'early';
-    badgeText = Math.round(-v.delay/60) + '\' anticipo';
+  var dState = delayState(v.delay);
+  var badgeText = delayLabel(v.delay);
+  var headExtra = '';
+  // Next-stop schedule comparison in the header.
+  var _detail = (v.tid && tripDetailCache[v.tid]) ? tripDetailCache[v.tid] : null;
+  var _tt = (v.tid && tripTimetableCache[v.tid]) ? tripTimetableCache[v.tid] : null;
+  var _ttMap = {};
+  if(_tt) _tt.forEach(function(r){ _ttMap[String(r.stop_id)] = r; });
+  if(v.stopId && stopData.length){
+    var _ns = null;
+    for(var _ni=0; _ni<stopData.length; _ni++){ if(String(stopData[_ni].id)===String(v.stopId)){ _ns = stopData[_ni]; break; } }
+    if(_ns){
+      var _sched = _ttMap[String(v.stopId)] ? shortTime(_ttMap[String(v.stopId)].arrival) : null;
+      var _rt = (_detail && _detail.stops && _detail.stops[String(v.stopId)] && _detail.stops[String(v.stopId)].time != null)
+        ? clockFromEpoch(_detail.stops[String(v.stopId)].time) : null;
+      headExtra = '<div class="sched-line">Prossima: <strong>' + escapeHtml(_ns.name) + '</strong><br>programmato <strong>' +
+        escapeHtml(_sched || 'n/d') + '</strong> • stimato <strong>' + escapeHtml(_rt || 'n/d') + '</strong></div>';
+    }
+  } else if(dState === 'unknown'){
+    headExtra = '<div class="sched-line">Dati di ritardo non disponibili per questa corsa.</div>';
   }
-  spAd.innerHTML = '<div class="status-badge '+badgeClass+'">'+badgeText+'</div>';
+  spAd.innerHTML = '<div class="status-badge '+dState+'">'+escapeHtml(badgeText)+'</div>' + headExtra;
 
   var html = '';
   var sid = v.shapeId || (routeShapes[v.rid] && routeShapes[v.rid][0]);
@@ -995,6 +1080,16 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
           if(etaInfo && String(etaInfo.vid) === String(v.id)) {
             etaText = etaInfo.eta + ' min';
           }
+
+          // Simple delay status per stop (per-stop delay, fallback to trip delay).
+          var stopDelay = v.delay;
+          if(_detail && _detail.stops && _detail.stops[String(stopId)] && _detail.stops[String(stopId)].delay != null){
+            stopDelay = _detail.stops[String(stopId)].delay;
+          }
+          var schedSub = '';
+          if(!isPassed){
+            schedSub = '<div class="sched-sub">' + escapeHtml(delayLabel(stopDelay)) + '</div>';
+          }
           
           var isFirst = idx === 0;
           var isLast = idx === seq.length - 1;
@@ -1013,7 +1108,7 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
             '<div class="dot" style="'+dotStyle+'"></div>' +
             '</div>' +
             '<div class="name-col">' + escapeHtml(s.name) + '</div>' +
-            '<div class="eta-col">' + (isPassed ? 'passato' : etaText) + '</div>' +
+            '<div class="eta-col">' + (isPassed ? 'passato' : etaText + schedSub) + '</div>' +
             '</div>';
         });
         
@@ -1039,15 +1134,18 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
     if(best){
       disp=best.eta;
       vid=best.vid;
-      // Delay drives card color + ritardo/anticipo text (independent of confidence)
-      if(best.delay>60) {
+      // Delay drives card color + ritardo/anticipo text (independent of confidence).
+      // Unknown delay (null) → neutral card + explicit unknown badge, never assume on-time.
+      if(best.delay != null && best.delay>60) {
         cardClass += ' sp-l--delayed';
         delayHtml='<div class="delay-badge delayed">'+Math.round(best.delay/60)+'\' ritardo</div>';
-      } else if(best.delay<-60) {
+      } else if(best.delay != null && best.delay<-60) {
         cardClass += ' sp-l--early';
         delayHtml='<div class="delay-badge early">'+Math.round(-best.delay/60)+'\' anticipo</div>';
-      } else {
+      } else if(best.delay != null) {
         cardClass += ' sp-l--ontime';
+      } else {
+        delayHtml='<div class="delay-badge unknown">ritardo n/d</div>';
       }
       // Confidence badge independent of delay
       if(best.confidence === 'low') {
@@ -1259,6 +1357,7 @@ map.on('zoomend',updateMarkerVisibilities);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeStopPanel();});
 
 function getDelayColor(delay) {
+  if (delay == null || isNaN(delay)) return '#9ca3af'; // Gray = unknown
   if (delay <= 60) return '#10b981'; // Green
   if (delay <= 300) return '#f97316'; // Orange
   return '#ef4444'; // Red
@@ -1362,7 +1461,7 @@ async function fetchData(){
       fetch('/api/etas').then(function(r){return r.json();}),
       fetch('/api/status').then(function(r){return r.json();})
     ]);
-    vehicles.forEach(function(v){v.delay=delays[v.tid]||0;});
+    vehicles.forEach(function(v){ v.delay = (v.tid != null && delays[v.tid] != null) ? delays[v.tid] : null; });
     if(spVehicle) {
       var uv = vehicles.find(function(veh){return String(veh.id) === String(spVehicle.id);});
       if(uv) {
@@ -1456,7 +1555,8 @@ async function fetchData(){
     
     var tsText = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     if(spVehicle) {
-      tsText += " | Bus: " + spVehicle.id + " | Delay: " + Math.round(spVehicle.delay/60) + "m | Split: " + (activeShapePoints ? "Active (" + activeShapePoints.length + ")" : "None");
+      var dTxt = (spVehicle.delay != null && !isNaN(spVehicle.delay)) ? Math.round(spVehicle.delay/60) + "m" : "n/d";
+      tsText += " | Bus: " + spVehicle.id + " | Delay: " + dTxt + " | Split: " + (activeShapePoints ? "Active (" + activeShapePoints.length + ")" : "None");
     }
     document.getElementById('ts').textContent = tsText;
     var cnt=document.getElementById('cnt');
