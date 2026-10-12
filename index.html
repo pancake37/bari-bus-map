@@ -1236,8 +1236,10 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
   spAd.textContent=s.code?s.code:'';
   var liveHtml='',routes=stopInfo[s.id]||[],etas=etasCache[s.id]||{};
   var liveTids={}; // trip_ids already shown as live arrivals (skip in scheduled list)
+  var schedKnown = stopTimetableCache[s.id] != null; // scheduled fallback loaded?
   routes.forEach(function(r){
     var st=getStyle(r.route_id),best=etas[r.route_id];
+    if(!best && schedKnown) return; // no bus approaching → covered by Programmati below
     var disp='&mdash;',delayHtml='',confidenceHtml='',vid='';
     var cardClass = 'sp-l';
     var aria = 'Linea ' + st.name + ', destinazione ' + (r.headsign ? r.headsign : 'Linea ' + st.name);
@@ -1296,7 +1298,7 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
       '<div class="right-col">' +
         '<div class="eta-box">' +
           '<span class="min-val">'+disp+'</span>' +
-          '<span class="eta-unit">&nbsp;min</span>' +
+          (best ? '<span class="eta-unit">&nbsp;min</span>' : '') +
         '</div>' +
         delayHtml + confidenceHtml +
       '</div>' +
