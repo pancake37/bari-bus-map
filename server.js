@@ -78,7 +78,8 @@ function isAllowedStatic(relative) {
 }
 
 let gtfsData = emptyGtfsData();
-let vehiclesCache = [], delaysCache = {}, etasCache = {}, otpCache = {};
+let vehiclesCache = [], delaysCache = {}, tripUpdatesCache = {}, etasCache = {}, otpCache = {};
+let tripTimetableCache = {}; // trip_id → [{stop_id, arrival, sequence}] sorted by sequence
 let histSpeed = {}, obsBuffer = [], obsCount = 0, logStream = null, logDate = '';
 // Graceful fallback backup
 let lastVehiclesBackup = null, lastDelaysBackup = null;
@@ -132,6 +133,7 @@ function loadCache() {
             if (!gtfsData.graphs || Object.keys(gtfsData.graphs).length === 0) buildGraphs();
             if (!gtfsData.stopRoutePos || Object.keys(gtfsData.stopRoutePos).length === 0) buildStopRoutePositions();
             if (!gtfsData.stopSequence || Object.keys(gtfsData.stopSequence).length === 0) buildStopSequences();
+            buildTripTimetable();
             // Rebuild today's routeShapes from full trip index (non-destructive)
             recomputeActiveServices(true);
             console.log('  GTFS cache loaded: ' + Object.keys(gtfsData.routes).length + ' routes, ' +
@@ -278,6 +280,7 @@ function extractAll() {
         buildGraphs();
         buildStopRoutePositions();
         buildStopSequences();
+        buildTripTimetable();
 
         console.log('  GTFS extracted: ' + Object.keys(gtfsData.routes).length + ' routes, ' +
             gtfsData.stops.length + ' stops, ' + Object.keys(gtfsData.shapes).length + ' shapes, ' +
@@ -395,6 +398,44 @@ function buildStopSequences() {
     });
 }
 
+// ── Trip Timetable (trip_id → ordered stop times) ──────────────────────────
+// Built from the inverted stopTimes index + tripStopSeq so the vehicle panel
+// can show scheduled vs realtime arrival per stop.
+
+function buildTripTimetable() {
+    tripTimetableCache = {};
+    const stopTimes = gtfsData.stopTimes || {};
+    Object.keys(stopTimes).forEach(stopId => {
+        const rows = stopTimes[stopId];
+        if (!Array.isArray(rows)) return;
+        rows.forEach(r => {
+            const tid = r.trip_id;
+            if (!tid) return;
+            if (!tripTimetableCache[tid]) tripTimetableCache[tid] = [];
+            const seqMap = gtfsData.tripStopSeq && gtfsData.tripStopSeq[tid];
+            tripTimetableCache[tid].push({
+                stop_id: stopId,
+                arrival: r.arrival || '',
+                sequence: (seqMap && seqMap[stopId] != null) ? seqMap[stopId] : null
+            });
+        });
+    });
+    Object.keys(tripTimetableCache).forEach(tid => {
+        tripTimetableCache[tid].sort((a, b) => {
+            if (a.sequence != null && b.sequence != null) return a.sequence - b.sequence;
+            if (a.sequence != null) return -1;
+            if (b.sequence != null) return 1;
+            return String(a.arrival).localeCompare(String(b.arrival));
+        });
+    });
+}
+
+function getTripTimetable(tid) {
+    if (!tid) return [];
+    if (!tripTimetableCache[tid]) return [];
+    return tripTimetableCache[tid];
+}
+
 // ── Encoded Polyline (Google-style) ──────────────────────────────────────────
 
 function encodePolylineSigned(value) {
@@ -462,7 +503,7 @@ function extractFeatures(v, vehCum, nextStopId) {
         spd_mps: v.spd / 3.6,
         cum_km: vehCum,
         dist_m: Math.round(distToStop * 1000),
-        delay_s: delaysCache[v.tid] || 0,
+        delay_s: delaysCache[v.tid] != null ? delaysCache[v.tid] : null,
         day: dayType,
         rush,
         far,
@@ -584,12 +625,13 @@ function computeOTP() {
     const otp = {};
     vehiclesCache.forEach(v => {
         if (!otp[v.rid]) otp[v.rid] = { total: 0, onTime: 0 };
+        const delay = delaysCache[v.tid];
+        if (delay == null) return; // unknown delay → exclude from OTP
         otp[v.rid].total++;
-        const delay = delaysCache[v.tid] || 0;
         if (delay >= OTP_EARLY_S && delay <= OTP_LATE_S) otp[v.rid].onTime++;
     });
     Object.keys(otp).forEach(rid => {
-        otp[rid].otpPct = Math.round(otp[rid].onTime / otp[rid].total * 100);
+        otp[rid].otpPct = otp[rid].total ? Math.round(otp[rid].onTime / otp[rid].total * 100) : null;
     });
     return otp;
 }
@@ -651,24 +693,51 @@ function pollRealtime() {
     fetchJSON(AMTAB_TRIP, (err, tripData) => {
         if (!err && tripData) {
             const d = {};
+            const full = {};
             (tripData.Entity || tripData.Entities || []).forEach(e => {
                 const tu = e.TripUpdate;
                 if (tu && tu.Trip && tu.Trip.TripId) {
-                    const a = (tu.StopTimeUpdate || []).map(s => s.Arrival && s.Arrival.Delay ? s.Arrival.Delay : null).filter(Boolean);
-                    d[tu.Trip.TripId] = a.length ? Math.max.apply(null, a) : 0;
+                    const tid = tu.Trip.TripId;
+                    // AMTAB uses StopTimeUpdates (plural); accept singular too.
+                    const updates = tu.StopTimeUpdates || tu.StopTimeUpdate || [];
+                    const perStop = {};
+                    const delays = [];
+                    updates.forEach(s => {
+                        const arr = s.Arrival || {};
+                        const dep = s.Departure || {};
+                        const delay = (typeof arr.Delay === 'number') ? arr.Delay
+                            : (typeof dep.Delay === 'number' ? dep.Delay : null);
+                        const time = (typeof arr.Time === 'number') ? arr.Time
+                            : (typeof dep.Time === 'number' ? dep.Time : null);
+                        if (delay != null) delays.push(delay);
+                        const key = s.StopId != null ? String(s.StopId) : null;
+                        if (key) perStop[key] = {
+                            delay: delay != null ? delay : null,
+                            time: time != null ? time : null,
+                            sequence: s.StopSequence != null ? s.StopSequence : null
+                        };
+                    });
+                    // Top-level Delay is authoritative when present.
+                    let tripDelay = (typeof tu.Delay === 'number') ? tu.Delay : null;
+                    if (tripDelay == null && delays.length) tripDelay = Math.max.apply(null, delays);
+                    if (tripDelay != null) d[tid] = tripDelay;
+                    full[tid] = { delay: tripDelay, stops: perStop };
                 }
             });
             delaysCache = d;
-            lastDelaysBackup = { data: d, ts: Date.now() };
+            tripUpdatesCache = full;
+            lastDelaysBackup = { data: d, full, ts: Date.now() };
             realtimeStatus.tripUpdatesUpdatedAt = lastDelaysBackup.ts;
             realtimeStatus.tripUpdatesStale = false;
         } else {
             if (err) warnFetch(err);
             if (lastDelaysBackup && (Date.now() - lastDelaysBackup.ts) < BACKUP_TTL_MS) {
                 delaysCache = lastDelaysBackup.data;
+                tripUpdatesCache = lastDelaysBackup.full || {};
                 realtimeStatus.tripUpdatesStale = true;
             } else {
                 delaysCache = {};
+                tripUpdatesCache = {};
                 realtimeStatus.tripUpdatesStale = true;
             }
         }
@@ -775,7 +844,7 @@ function computeETAs() {
                     const diff = Math.abs(geoTripSeq - v.currentStopSequence);
                     confidence = diff > CONFIDENCE_SEQ_THRESHOLD ? 'low' : 'high';
                 }
-                etas[sid][v.rid] = { eta, delay: delaysCache[v.tid] || 0, vid: v.id, confidence };
+                etas[sid][v.rid] = { eta, delay: delaysCache[v.tid] != null ? delaysCache[v.tid] : null, vid: v.id, confidence };
             }
         });
 
@@ -864,6 +933,19 @@ http.createServer((req, res) => {
     if (url === '/api/otp') {
         res.writeHead(200, dynamicHead);
         return res.end(JSON.stringify(otpCache));
+    }
+    if (url.startsWith('/api/trip-detail')) {
+        const u = new URL(url, 'http://localhost');
+        const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
+        const detail = (tid && tripUpdatesCache[tid]) ? tripUpdatesCache[tid] : { delay: null, stops: {} };
+        res.writeHead(200, dynamicHead);
+        return res.end(JSON.stringify({ tripId: tid, delay: detail.delay != null ? detail.delay : null, stops: detail.stops || {} }));
+    }
+    if (url.startsWith('/api/trip-timetable')) {
+        const u = new URL(url, 'http://localhost');
+        const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
+        res.writeHead(200, staticHead);
+        return res.end(JSON.stringify(getTripTimetable(tid)));
     }
     if (url === '/api/stats') {
         res.writeHead(200, dynamicHead);
