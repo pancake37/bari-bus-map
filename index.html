@@ -1782,7 +1782,7 @@ async function fetchData(){
     
     updateMarkerVisibilities();
     
-    var tsText = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    var tsText = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false});
     if(spVehicle) {
       var dTxt = (spVehicle.delay != null && !isNaN(spVehicle.delay)) ? Math.round(spVehicle.delay/60) + "m" : "n/d";
       tsText += " | Bus: " + spVehicle.id + " | Delay: " + dTxt + " | Split: " + (activeShapePoints ? "Active (" + activeShapePoints.length + ")" : "None");
