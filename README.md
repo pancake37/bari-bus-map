@@ -29,11 +29,13 @@ No React. No build step. No database. Just `node server.js` and a browser tab.
 | **Confidence-scored predictions** | Cross-checks the geometric projection against the GTFS-RT `CurrentStopSequence` field. If they disagree by more than one stop, the ETA is flagged `low` confidence in the API and shown as an estimate in the UI instead of a live pulse. |
 | **Schedule vs realtime status** | Clicking a bus shows late / early / unknown from GTFS-RT delays, with programmed vs estimated arrival per stop (nothing shown when on time — same rule as the official MyCicero portal; unknown is shown explicitly, never assumed on-time). |
 | **Scheduled fallback** | Stop panels list today's upcoming programmed passes (like MyCicero's "Orario dei passaggi") with a live overlay when the trip is monitored; any programmed pass opens its full trip detail ("Dettaglio corsa"). |
+| **Realtime delay history** | Trip delays are retained 15 min after a trip drops out of the feed (flagged `stale`), so badges don't flicker to unknown between polls — same as MyCicero keeping realtime per solution. |
+| **Accessible panels** | Stop cards, bus timeline rows and trip rows carry full-sentence aria-labels (line, destination, ETA, delay status) and are keyboard-operable (Enter/Space). |
 | **Calendar-aware schedules** | Parses `calendar.txt` / `calendar_dates.txt` so the stop timeline only shows trips that actually run *today* — no more Sunday-only routes appearing on a Tuesday. |
 | **Road-snapped animation** | Buses animate along the actual route geometry between GPS updates (via waypoint interpolation), instead of cutting straight through city blocks. |
 | **Self-learning speed model** | Historical average speed per route/time-block updates online from every observed GPS ping — no offline training step, no static lookup table. |
 | **Graceful degradation** | If the AMTAB real-time feed hiccups, the server serves a 5-minute-TTL backup instead of an empty map. |
-| **Light/dark theme** | Toggles both the UI chrome and the underlying CartoDB basemap tiles; choice persists across sessions via `localStorage`. |
+| **Light/dark theme** | Toggles both the UI chrome and the underlying Esri Canvas basemap tiles; choice persists across sessions via `localStorage`. |
 | **Minimalist map design** | POIs stripped from the basemap in both themes, so roads/stops/vehicles stay the only thing competing for attention. |
 | **Lazy-loaded shapes** | The ~13 MB of route geometry is fetched per-route only on click, keeping cold start under 50 ms. |
 | **One-tap deep links** | Stop and vehicle panels link straight out to Google Maps / Moovit by coordinates. |
@@ -93,7 +95,7 @@ The historical average itself is never hand-tuned — every valid GPS observatio
 | `GET /api/trip-timetable?tripId=` | static | Static schedule `[{ stop_id, arrival, sequence }]` for schedule-vs-realtime comparison |
 | `GET /api/stop-timetable?stopId=` | no-store | Upcoming scheduled passes for today `[{ trip_id, route_id, arrival, headsign, direction, delay, stale, monitored }]` (active services only, MyCicero-style fallback; `delay` falls back to last-known realtime ≤15 min, `stale: true` then) |
 | `GET /api/etas` | no-store | `{ [stopId]: { [routeId]: { eta, delay, vid, confidence } } }` |
-| `GET /api/otp` | no-store | Per-route OTP `{ total, onTime, otpPct }` |
+| `GET /api/otp` | no-store | Per-route OTP `{ total, onTime, otpPct }` (trips with unknown delay excluded) |
 | `GET /api/stats` | no-store | Vehicle count, buffer sizes, historical routes |
 | `GET /api/status` | no-store | RT-feed freshness and cached-data flags |
 | `GET /api/routes` | static | Route catalog |
@@ -133,7 +135,7 @@ npm test    # unit tests (CSV, calendar rebuild, ZIP extract)
 | Trip Updates | `https://avl.amtab.it/WSExportGTFS_RT/api/gtfs/TripUpdates` | GTFS-RT |
 | Static GTFS | Local `google_transit.zip` | Static GTFS zip |
 
-Note: `VechiclePosition` is the spelling used by the AMTAB endpoint.
+Note: `VechiclePosition` is the spelling used by the AMTAB endpoint. Its TripUpdates payload also deviates from the usual naming: per-stop updates arrive as `StopTimeUpdates` (plural) with an authoritative top-level `Delay` — the server accepts both shapes.
 
 ## Security
 
