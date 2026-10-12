@@ -91,7 +91,7 @@ The historical average itself is never hand-tuned — every valid GPS observatio
 | `GET /api/trip-updates` | no-store | Per-trip delay in seconds (`{ [tripId]: delay }`; trips without RT data are omitted = unknown) |
 | `GET /api/trip-detail?tripId=` | no-store | Per-trip realtime detail `{ tripId, delay, stops: { [stopId]: { delay, time, sequence } }, shapeId }` (`delay: null` = unknown) |
 | `GET /api/trip-timetable?tripId=` | static | Static schedule `[{ stop_id, arrival, sequence }]` for schedule-vs-realtime comparison |
-| `GET /api/stop-timetable?stopId=` | no-store | Upcoming scheduled passes for today `[{ trip_id, route_id, arrival, headsign, direction }]` (active services only, MyCicero-style fallback) |
+| `GET /api/stop-timetable?stopId=` | no-store | Upcoming scheduled passes for today `[{ trip_id, route_id, arrival, headsign, direction, delay, stale, monitored }]` (active services only, MyCicero-style fallback; `delay` falls back to last-known realtime ≤15 min, `stale: true` then) |
 | `GET /api/etas` | no-store | `{ [stopId]: { [routeId]: { eta, delay, vid, confidence } } }` |
 | `GET /api/otp` | no-store | Per-route OTP `{ total, onTime, otpPct }` |
 | `GET /api/stats` | no-store | Vehicle count, buffer sizes, historical routes |

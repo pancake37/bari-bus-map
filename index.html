@@ -1026,14 +1026,16 @@ function renderTripPanel(){
   spNm.innerHTML = '<div class="nm-wrap"><span style="color:'+st.bg+';font-weight:800;font-size:1.4rem">Line '+escapeHtml(st.name)+'</span></div>';
   var liveV=null;
   for(var i=0;i<lastVehicles.length;i++){ if(String(lastVehicles[i].tid)===String(tid)){ liveV=lastVehicles[i]; break; } }
-  var dState = liveV ? delayState(liveV.delay) : 'unknown';
+  var det0 = tripDetailCache[tid] || null;
+  var effDelay = liveV ? liveV.delay : (det0 && typeof det0.delay === 'number' ? det0.delay : null);
+  var dState = delayState(effDelay);
   var badgeHtml = (dState === 'ontime') ? '' :
-    '<div class="status-badge '+dState+'">'+escapeHtml(delayLabel(liveV ? liveV.delay : null))+'</div>';
+    '<div class="status-badge '+dState+'">'+escapeHtml(delayLabel(effDelay))+'</div>';
   var tt = tripTimetableCache[tid];
   var firstT = (tt && tt.length && tt[0].arrival) ? shortTime(tt[0].arrival) : null;
   spAd.innerHTML = badgeHtml + '<div class="sched-line">Corsa programmata' +
     (firstT ? ' • partenza <strong>'+escapeHtml(firstT)+'</strong>' : '') +
-    (liveV ? ' • <strong>mezzo monitorato</strong>' : ' • mezzo non monitorato') + '</div>';
+    (liveV ? ' • <strong>mezzo monitorato</strong>' : (det0 && det0.stale && effDelay != null ? ' • ultimo dato realtime' : ' • mezzo non monitorato')) + '</div>';
   var stopMap={};
   stopData.forEach(function(s){ stopMap[s.id]=s; });
   var html='';
@@ -1044,7 +1046,7 @@ function renderTripPanel(){
       var t = shortTime(row.arrival);
       var hl = (spTrip.stopId && String(spTrip.stopId)===String(row.stop_id)) ? ' style="border-color:'+st.bg+';border-width:2px"' : '';
       var aria = 'Passaggio programmato ore ' + (t || 'sconosciuta') + ', linea ' + st.name +
-        ', fermata ' + s.name + (liveV ? (dState==='ontime' ? ', mezzo monitorato in orario' : ', ' + delayLabel(liveV.delay)) : ', mezzo non monitorato');
+        ', fermata ' + s.name + (liveV ? (dState==='ontime' ? ', mezzo monitorato in orario' : ', ' + delayLabel(effDelay)) : (effDelay != null ? ', ' + delayLabel(effDelay) + ' (ultimo dato disponibile)' : ', mezzo non monitorato'));
       html += '<div class="stop-row"'+hl+' role="button" tabindex="0" aria-label="'+escapeHtml(aria)+'" data-stop="'+escapeHtml(row.stop_id)+'">' +
         '<div class="timeline-col"><div class="line" style="background:'+st.bg+';"></div>' +
         '<div class="dot" style="border-color:'+st.bg+';background:var(--color-paper);"></div></div>' +
@@ -1335,6 +1337,13 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
       else if(ls==='early'){ extraHtml='<div class="delay-badge early">'+Math.round(-lv.delay/60)+'\' anticipo</div>'; ariaS += ', mezzo monitorato, anticipo di ' + Math.round(-lv.delay/60) + ' minuti'; }
       else if(ls==='unknown'){ extraHtml='<div class="delay-badge unknown">ritardo n/d</div>'; ariaS += ', mezzo monitorato, ritardo sconosciuto'; }
       else { ariaS += ', mezzo monitorato in orario'; }
+    } else if(typeof p.delay === 'number'){
+      // Last-known realtime (trip left the feed): keep the badge like MyCicero.
+      rightInner = '<span class="sched-val">'+escapeHtml(ptime || '—')+'</span>';
+      var ps = delayState(p.delay);
+      if(ps==='delayed'){ extraHtml='<div class="delay-badge delayed">'+Math.round(p.delay/60)+'\' ritardo</div>'; ariaS += ', ritardo previsto di ' + Math.round(p.delay/60) + ' minuti'; }
+      else if(ps==='early'){ extraHtml='<div class="delay-badge early">'+Math.round(-p.delay/60)+'\' anticipo</div>'; ariaS += ', anticipo previsto di ' + Math.round(-p.delay/60) + ' minuti'; }
+      if(p.stale) ariaS += ' (ultimo dato disponibile)';
     } else {
       rightInner = '<span class="sched-val">'+escapeHtml(ptime || '—')+'</span>';
       ariaS += ', mezzo non monitorato';
