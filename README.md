@@ -27,7 +27,8 @@ No React. No build step. No database. Just `node server.js` and a browser tab.
 |---|---|
 | **Geometric ETA engine** | Projects each vehicle onto a directed graph of the route shape (not a straight line to the next stop) and predicts downstream arrivals segment-by-segment, blending instantaneous GPS speed with a self-learned historical average per route and time-of-day block. |
 | **Confidence-scored predictions** | Cross-checks the geometric projection against the GTFS-RT `CurrentStopSequence` field. If they disagree by more than one stop, the ETA is flagged `low` confidence in the API and shown as an estimate in the UI instead of a live pulse. |
-| **Schedule vs realtime status** | Clicking a bus shows on-time / late / early / unknown from GTFS-RT delays, with programmed vs estimated arrival per stop (unknown is shown explicitly, never assumed on-time). |
+| **Schedule vs realtime status** | Clicking a bus shows late / early / unknown from GTFS-RT delays, with programmed vs estimated arrival per stop (nothing shown when on time — same rule as the official MyCicero portal; unknown is shown explicitly, never assumed on-time). |
+| **Scheduled fallback** | Stop panels list today's upcoming programmed passes (like MyCicero's "Orario dei passaggi") with a live overlay when the trip is monitored; any programmed pass opens its full trip detail ("Dettaglio corsa"). |
 | **Calendar-aware schedules** | Parses `calendar.txt` / `calendar_dates.txt` so the stop timeline only shows trips that actually run *today* — no more Sunday-only routes appearing on a Tuesday. |
 | **Road-snapped animation** | Buses animate along the actual route geometry between GPS updates (via waypoint interpolation), instead of cutting straight through city blocks. |
 | **Self-learning speed model** | Historical average speed per route/time-block updates online from every observed GPS ping — no offline training step, no static lookup table. |
@@ -88,8 +89,9 @@ The historical average itself is never hand-tuned — every valid GPS observatio
 |----------|-------|-------------|
 | `GET /api/vehicles` | no-store | Live vehicle positions from the GTFS-RT feed |
 | `GET /api/trip-updates` | no-store | Per-trip delay in seconds (`{ [tripId]: delay }`; trips without RT data are omitted = unknown) |
-| `GET /api/trip-detail?tripId=` | no-store | Per-trip realtime detail `{ tripId, delay, stops: { [stopId]: { delay, time, sequence } } }` (`delay: null` = unknown) |
+| `GET /api/trip-detail?tripId=` | no-store | Per-trip realtime detail `{ tripId, delay, stops: { [stopId]: { delay, time, sequence } }, shapeId }` (`delay: null` = unknown) |
 | `GET /api/trip-timetable?tripId=` | static | Static schedule `[{ stop_id, arrival, sequence }]` for schedule-vs-realtime comparison |
+| `GET /api/stop-timetable?stopId=` | no-store | Upcoming scheduled passes for today `[{ trip_id, route_id, arrival, headsign, direction, delay, stale, monitored }]` (active services only, MyCicero-style fallback; `delay` falls back to last-known realtime ≤15 min, `stale: true` then) |
 | `GET /api/etas` | no-store | `{ [stopId]: { [routeId]: { eta, delay, vid, confidence } } }` |
 | `GET /api/otp` | no-store | Per-route OTP `{ total, onTime, otpPct }` |
 | `GET /api/stats` | no-store | Vehicle count, buffer sizes, historical routes |
@@ -155,7 +157,7 @@ The included ZIP reader is cross-platform and uses pure JavaScript for stored an
 - **PowerShell fallback still present** — GTFS ZIP extraction is pure-JS first (works on any OS), with an `unzip` CLI fallback, and `PowerShell Expand-Archive` only as a last resort on Windows if both prior methods fail on an unusual archive. It's dead code on Linux/macOS and should trigger a proper error report if it's ever hit.
 - **In-memory state only** — vehicle/ETA caches live in process memory; running multiple server instances behind a load balancer will give each instance a different view of historical speeds.
 - **No authentication or rate limiting** on the API — fine for local/single-user use, not yet hardened for public multi-tenant deployment.
-- **Client map tiles** still load from CartoCDN (network required for basemap).
+- **Client map tiles** load from Esri Canvas basemaps (network required for basemap).
 - **OTP dashboard** is available as JSON API only (no dedicated UI).
 
 ## Roadmap

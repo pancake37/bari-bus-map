@@ -80,6 +80,27 @@ function isAllowedStatic(relative) {
 let gtfsData = emptyGtfsData();
 let vehiclesCache = [], delaysCache = {}, tripUpdatesCache = {}, etasCache = {}, otpCache = {};
 let tripTimetableCache = {}; // trip_id → [{stop_id, arrival, sequence}] sorted by sequence
+// Last-known realtime per trip, retained across polls (MyCicero keeps realtime
+// per solution even after the trip drops out of the feed).
+let tripDelayHistory = {}; // tid → {delay, stops, updatedAt}
+const TRIP_HISTORY_TTL_MS = 15 * 60 * 1000;
+
+function pruneTripHistory() {
+    const cutoff = Date.now() - TRIP_HISTORY_TTL_MS;
+    Object.keys(tripDelayHistory).forEach(tid => {
+        if (tripDelayHistory[tid].updatedAt < cutoff) delete tripDelayHistory[tid];
+    });
+}
+
+// Trip realtime with history fallback: {delay, stops, stale, shapeId}.
+function tripDetailWithHistory(tid) {
+    pruneTripHistory();
+    const live = tid && tripUpdatesCache[tid];
+    if (live) return { delay: live.delay != null ? live.delay : null, stops: live.stops || {}, stale: false };
+    const hist = tid && tripDelayHistory[tid];
+    if (hist) return { delay: hist.delay != null ? hist.delay : null, stops: hist.stops || {}, stale: true };
+    return { delay: null, stops: {}, stale: false };
+}
 let histSpeed = {}, obsBuffer = [], obsCount = 0, logStream = null, logDate = '';
 // Graceful fallback backup
 let lastVehiclesBackup = null, lastDelaysBackup = null;
@@ -436,6 +457,68 @@ function getTripTimetable(tid) {
     return tripTimetableCache[tid];
 }
 
+// ── Stop Timetable (upcoming scheduled passes for a stop, today) ──────────
+// Same role as MyCicero's "Orario dei passaggi": the scheduled fallback shown
+// when no live bus is approaching. Filtered by today's active services.
+
+function romeNowMinutes() {
+    try {
+        const parts = new Intl.DateTimeFormat('en-US', {
+            timeZone: GTFS_TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false
+        }).formatToParts(new Date());
+        let h = parseInt(parts.find(p => p.type === 'hour').value, 10);
+        const m = parseInt(parts.find(p => p.type === 'minute').value, 10);
+        if (isNaN(h) || isNaN(m)) return null;
+        h = ((h % 24) + 24) % 24; // '24' edge at midnight with hour12:false
+        return h * 60 + m;
+    } catch (e) { return null; }
+}
+
+function arrivalToMinutes(a) {
+    const p = String(a || '').split(':');
+    if (p.length < 2) return null;
+    const h = parseInt(p[0], 10), m = parseInt(p[1], 10);
+    if (isNaN(h) || isNaN(m)) return null;
+    return h * 60 + m; // may exceed 24*60 for after-midnight trips (kept on purpose)
+}
+
+function getStopTimetable(stopId, limit) {
+    const rows = (gtfsData.stopTimes && gtfsData.stopTimes[stopId]) || [];
+    const now = new Date();
+    const activeSids = hasServiceCalendar(gtfsData.calendar, gtfsData.calendarDates)
+        ? getActiveServiceIds(gtfsData.calendar, gtfsData.calendarDates, now, GTFS_TIME_ZONE) : null;
+    const sidMap = gtfsData.serviceIdMap || serviceIdMap;
+    const nowMin = romeNowMinutes();
+    const out = [];
+    rows.forEach(r => {
+        if (!r.trip_id) return;
+        if (activeSids && !activeSids.has(sidMap[r.trip_id])) return;
+        const mins = arrivalToMinutes(r.arrival);
+        if (mins == null) return;
+        // Keep passes not yet gone (10 min grace for just-departed); after-midnight
+        // times (>24h) always sort after this evening's passes.
+        if (nowMin != null && mins < nowMin - 10 && mins < 24 * 60) return;
+        // Realtime overlay: live trip, else last-known delay (history), else unknown.
+        const det = tripDetailWithHistory(r.trip_id);
+        let monitored = false;
+        for (let vi = 0; vi < vehiclesCache.length; vi++) {
+            if (String(vehiclesCache[vi].tid) === String(r.trip_id)) { monitored = true; break; }
+        }
+        out.push({
+            trip_id: r.trip_id,
+            route_id: r.route_id,
+            arrival: r.arrival || '',
+            headsign: r.headsign || '',
+            direction: r.direction || '',
+            delay: det.delay,
+            stale: det.stale,
+            monitored
+        });
+    });
+    out.sort((a, b) => arrivalToMinutes(a.arrival) - arrivalToMinutes(b.arrival));
+    return out.slice(0, limit || 12);
+}
+
 // ── Encoded Polyline (Google-style) ──────────────────────────────────────────
 
 function encodePolylineSigned(value) {
@@ -726,6 +809,10 @@ function pollRealtime() {
             });
             delaysCache = d;
             tripUpdatesCache = full;
+            Object.keys(full).forEach(tid => {
+                tripDelayHistory[tid] = { delay: full[tid].delay, stops: full[tid].stops, updatedAt: Date.now() };
+            });
+            pruneTripHistory();
             lastDelaysBackup = { data: d, full, ts: Date.now() };
             realtimeStatus.tripUpdatesUpdatedAt = lastDelaysBackup.ts;
             realtimeStatus.tripUpdatesStale = false;
@@ -937,15 +1024,21 @@ http.createServer((req, res) => {
     if (url.startsWith('/api/trip-detail')) {
         const u = new URL(url, 'http://localhost');
         const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
-        const detail = (tid && tripUpdatesCache[tid]) ? tripUpdatesCache[tid] : { delay: null, stops: {} };
+        const detail = tripDetailWithHistory(tid);
         res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify({ tripId: tid, delay: detail.delay != null ? detail.delay : null, stops: detail.stops || {} }));
+        return res.end(JSON.stringify({ tripId: tid, delay: detail.delay, stops: detail.stops, stale: detail.stale, shapeId: (tid && gtfsData.tripShapes[tid]) || '' }));
     }
     if (url.startsWith('/api/trip-timetable')) {
         const u = new URL(url, 'http://localhost');
         const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
         res.writeHead(200, staticHead);
         return res.end(JSON.stringify(getTripTimetable(tid)));
+    }
+    if (url.startsWith('/api/stop-timetable')) {
+        const u = new URL(url, 'http://localhost');
+        const stopId = u.searchParams.get('stopId') || u.searchParams.get('id') || '';
+        res.writeHead(200, dynamicHead);
+        return res.end(JSON.stringify(getStopTimetable(stopId, 12)));
     }
     if (url === '/api/stats') {
         res.writeHead(200, dynamicHead);

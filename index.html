@@ -404,16 +404,6 @@ body {
   cursor: pointer;
 }
 
-/* Default / On Time state class */
-.sp-l.sp-l--ontime {
-  background: var(--tint-mint);
-  border-color: oklch(80% 0.16 150 / 0.35);
-}
-.sp-l.sp-l--ontime:hover {
-  background: oklch(80% 0.16 150 / 0.20);
-  border-color: oklch(80% 0.16 150 / 0.5);
-}
-
 /* Early state class */
 .sp-l.sp-l--early {
   background: var(--tint-cyan);
@@ -502,7 +492,6 @@ body {
   font-weight: 700;
   line-height: 1;
 }
-.sp-l.sp-l--ontime .min-val { color: var(--color-accent-text-ontime); }
 .sp-l.sp-l--early .min-val { color: var(--color-accent-text-early); }
 .sp-l.sp-l--delayed .min-val { color: var(--color-accent-text-delayed); }
 
@@ -579,6 +568,22 @@ body {
   background: var(--color-paper-2);
   color: var(--color-muted);
   border: 1px solid var(--color-rule);
+}
+.sec-h {
+  font-family: var(--font-label);
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--color-muted);
+  padding: 14px 16px 2px;
+}
+.sp-l .sched-val {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-ink-2);
 }
 
 @media(max-width:640px) {
@@ -838,7 +843,8 @@ map.getContainer().appendChild(btn);
 
 // State
 var markers={},routeColors={},stopLayer=L.featureGroup().addTo(map),stopData=[],stopInfo={},routeShapes={},shapeStops={},stopsVisible=false,routeLine=null,routeTraveledLine=null,routeRemainingLine=null,routeLabel=null,lastVehicles=[],etasCache={},spStop=null,spVehicle=null,lastStopsState=null,activeShapePoints=null,lastSplitUpdate=0,shapeCache={},justOpened=false;
-var tripDetailCache={},tripTimetableCache={};
+var tripDetailCache={},tripTimetableCache={},stopTimetableCache={};
+var spTrip=null; // {tid, rid, stopId} — scheduled trip detail (Dettaglio corsa)
 
 // Schedule vs realtime helpers (vehicle panel)
 function delayState(delay){
@@ -868,6 +874,23 @@ function clockFromEpoch(sec){
   if(sec == null || isNaN(sec)) return null;
   try { return new Date(sec * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12:false}); }
   catch(e){ return null; }
+}
+// Rome wall-clock minutes (for filtering scheduled passes client-side).
+function romeNowMinutes(){
+  try {
+    var parts = new Intl.DateTimeFormat('en-US', {timeZone:'Europe/Rome', hour:'2-digit', minute:'2-digit', hour12:false}).formatToParts(new Date());
+    var h = 0, m = 0;
+    parts.forEach(function(p){ if(p.type==='hour') h=parseInt(p.value,10); if(p.type==='minute') m=parseInt(p.value,10); });
+    if(isNaN(h) || isNaN(m)) return null;
+    return (((h % 24) + 24) % 24) * 60 + m;
+  } catch(e){ return null; }
+}
+function arrivalToMinutes(a){
+  var p = String(a || '').split(':');
+  if(p.length < 2) return null;
+  var h = parseInt(p[0],10), m = parseInt(p[1],10);
+  if(isNaN(h) || isNaN(m)) return null;
+  return h * 60 + m;
 }
 
 // Encoded polyline decoder
@@ -945,6 +968,7 @@ function closeStopPanel(){
   spEl.classList.remove('open');
   spStop=null;
   spVehicle=null;
+  spTrip=null;
   clearRouteLine();
   updateMarkerVisibilities();
 }
@@ -953,19 +977,102 @@ function openStopPanel(s){
   setTimeout(function() { justOpened = false; }, 50);
   clearRouteLine();
   spVehicle=null;
+  spTrip=null;
   spStop=s;
   spEl.classList.add('open');
   renderStopPanel();
   var mapW=map.getSize().x;
   if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
   document.getElementById('ts').textContent='';
+  // Scheduled fallback (MyCicero "Orario dei passaggi") alongside live ETAs.
+  fetch('/api/stop-timetable?stopId=' + encodeURIComponent(s.id))
+    .then(function(r){return r.json();})
+    .then(function(d){ stopTimetableCache[s.id]=d; renderStopPanel(); })
+    .catch(function(){});
   updateMarkerVisibilities();
+}
+// Dettaglio corsa: scheduled trip detail (no live position required).
+function openTripPanel(tid, rid, stopId){
+  justOpened = true;
+  setTimeout(function() { justOpened = false; }, 50);
+  clearRouteLine();
+  spStop=null;
+  spVehicle=null;
+  spTrip={tid:tid, rid:rid, stopId:stopId || null};
+  spEl.classList.add('open');
+  renderTripPanel();
+  var mapW=map.getSize().x;
+  if(mapW>500){map.panBy([170,0],{animate:true,duration:.2});}
+  document.getElementById('ts').textContent='';
+  showRouteLine(rid, null);
+  if(!tripTimetableCache[tid]){
+    fetch('/api/trip-timetable?tripId=' + encodeURIComponent(tid))
+      .then(function(r){return r.json();})
+      .then(function(d){ tripTimetableCache[tid]=d; renderTripPanel(); })
+      .catch(function(){});
+  }
+  if(!tripDetailCache[tid]){
+    fetch('/api/trip-detail?tripId=' + encodeURIComponent(tid))
+      .then(function(r){return r.json();})
+      .then(function(d){ tripDetailCache[tid]=d; renderTripPanel(); })
+      .catch(function(){});
+  }
+  updateMarkerVisibilities();
+}
+function renderTripPanel(){
+  if(!spTrip||!spEl.classList.contains('open'))return;
+  var tid=spTrip.tid, rid=spTrip.rid;
+  var st=getStyle(rid);
+  spNm.innerHTML = '<div class="nm-wrap"><span style="color:'+st.bg+';font-weight:800;font-size:1.4rem">Line '+escapeHtml(st.name)+'</span></div>';
+  var liveV=null;
+  for(var i=0;i<lastVehicles.length;i++){ if(String(lastVehicles[i].tid)===String(tid)){ liveV=lastVehicles[i]; break; } }
+  var det0 = tripDetailCache[tid] || null;
+  var effDelay = liveV ? liveV.delay : (det0 && typeof det0.delay === 'number' ? det0.delay : null);
+  var dState = delayState(effDelay);
+  var badgeHtml = (dState === 'ontime') ? '' :
+    '<div class="status-badge '+dState+'">'+escapeHtml(delayLabel(effDelay))+'</div>';
+  var tt = tripTimetableCache[tid];
+  var firstT = (tt && tt.length && tt[0].arrival) ? shortTime(tt[0].arrival) : null;
+  spAd.innerHTML = badgeHtml + '<div class="sched-line">Corsa programmata' +
+    (firstT ? ' • partenza <strong>'+escapeHtml(firstT)+'</strong>' : '') +
+    (liveV ? ' • <strong>mezzo monitorato</strong>' : (det0 && det0.stale && effDelay != null ? ' • ultimo dato realtime' : ' • mezzo non monitorato')) + '</div>';
+  var stopMap={};
+  stopData.forEach(function(s){ stopMap[s.id]=s; });
+  var html='';
+  if(tt && tt.length){
+    tt.forEach(function(row){
+      var s = stopMap[row.stop_id];
+      if(!s) return;
+      var t = shortTime(row.arrival);
+      var hl = (spTrip.stopId && String(spTrip.stopId)===String(row.stop_id)) ? ' style="border-color:'+st.bg+';border-width:2px"' : '';
+      var aria = 'Passaggio programmato ore ' + (t || 'sconosciuta') + ', linea ' + st.name +
+        ', fermata ' + s.name + (liveV ? (dState==='ontime' ? ', mezzo monitorato in orario' : ', ' + delayLabel(effDelay)) : (effDelay != null ? ', ' + delayLabel(effDelay) + ' (ultimo dato disponibile)' : ', mezzo non monitorato'));
+      html += '<div class="stop-row"'+hl+' role="button" tabindex="0" aria-label="'+escapeHtml(aria)+'" data-stop="'+escapeHtml(row.stop_id)+'">' +
+        '<div class="timeline-col"><div class="line" style="background:'+st.bg+';"></div>' +
+        '<div class="dot" style="border-color:'+st.bg+';background:var(--color-paper);"></div></div>' +
+        '<div class="name-col">' + escapeHtml(s.name) + '</div>' +
+        '<div class="eta-col">' + escapeHtml(t || 'n/d') + '</div></div>';
+    });
+  } else {
+    html = '<div style="text-align:center;padding:20px;color:#71717a;font-size:.85rem">Caricamento orario…</div>';
+  }
+  scEl.innerHTML = html;
+  scEl.querySelectorAll('.stop-row').forEach(function(el){
+    function go(){
+      var target=null;
+      for(var k=0;k<stopData.length;k++){ if(String(stopData[k].id)===String(el.dataset.stop)){ target=stopData[k]; break; } }
+      if(target) openStopPanel(target);
+    }
+    el.onclick=go;
+    el.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } };
+  });
 }
 function openVehiclePanel(v){
   justOpened = true;
   setTimeout(function() { justOpened = false; }, 50);
   clearRouteLine();
   spStop=null;
+  spTrip=null;
   spVehicle=v;
   spEl.classList.add('open');
   renderVehiclePanel();
@@ -999,7 +1106,9 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
     '<a class="ext-link" href="https://moovitapp.com/?tll='+v.lat+'_'+v.lon+'" target="_blank" rel="noopener" title="Apri in Moovit">M</a></div>';
   
   var dState = delayState(v.delay);
-  var badgeText = delayLabel(v.delay);
+  // MyCicero rule: no badge when exactly on time — show it only for late/early/unknown.
+  var badgeHtml = (dState === 'ontime') ? '' :
+    '<div class="status-badge '+dState+'">'+escapeHtml(delayLabel(v.delay))+'</div>';
   var headExtra = '';
   // Next-stop schedule comparison in the header.
   var _detail = (v.tid && tripDetailCache[v.tid]) ? tripDetailCache[v.tid] : null;
@@ -1019,7 +1128,7 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
   } else if(dState === 'unknown'){
     headExtra = '<div class="sched-line">Dati di ritardo non disponibili per questa corsa.</div>';
   }
-  spAd.innerHTML = '<div class="status-badge '+dState+'">'+escapeHtml(badgeText)+'</div>' + headExtra;
+  spAd.innerHTML = badgeHtml + headExtra;
 
   var html = '';
   var sid = v.shapeId || (routeShapes[v.rid] && routeShapes[v.rid][0]);
@@ -1081,13 +1190,13 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
             etaText = etaInfo.eta + ' min';
           }
 
-          // Simple delay status per stop (per-stop delay, fallback to trip delay).
+          // Simple delay status per stop — shown only when late/early/unknown (MyCicero rule).
           var stopDelay = v.delay;
           if(_detail && _detail.stops && _detail.stops[String(stopId)] && _detail.stops[String(stopId)].delay != null){
             stopDelay = _detail.stops[String(stopId)].delay;
           }
           var schedSub = '';
-          if(!isPassed){
+          if(!isPassed && delayState(stopDelay) !== 'ontime'){
             schedSub = '<div class="sched-sub">' + escapeHtml(delayLabel(stopDelay)) + '</div>';
           }
           
@@ -1101,8 +1210,10 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
           if(!isPassed) dotStyle += 'background:var(--color-paper);';
           
           var rowClass = 'stop-row' + (isPassed ? ' passed' : '');
-          
-          html += '<div class="'+rowClass+'">' +
+          var ariaV = s.name + (isPassed ? ', fermata già passata'
+            : ', ' + (etaInfo && String(etaInfo.vid)===String(v.id) ? 'arrivo tra ' + etaInfo.eta + ' minuti' : 'orario non stimato') + ', ' + delayLabel(stopDelay));
+
+          html += '<div class="'+rowClass+'" aria-label="'+escapeHtml(ariaV)+'">' +
             '<div class="timeline-col">' +
             '<div class="line" style="'+lineStyle+'"></div>' +
             '<div class="dot" style="'+dotStyle+'"></div>' +
@@ -1125,43 +1236,60 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
     '<a class="ext-link" href="https://www.google.com/maps?q='+s.lat+','+s.lon+'" target="_blank" rel="noopener" title="Apri in Google Maps">G</a>' +
     '<a class="ext-link" href="https://moovitapp.com/?tll='+s.lat+'_'+s.lon+'" target="_blank" rel="noopener" title="Apri in Moovit">M</a></div>';
   spAd.textContent=s.code?s.code:'';
-  var html='',routes=stopInfo[s.id]||[],etas=etasCache[s.id]||{};
+  var liveHtml='',routes=stopInfo[s.id]||[],etas=etasCache[s.id]||{};
+  var liveTids={}; // trip_ids already shown as live arrivals (skip in scheduled list)
+  var schedKnown = stopTimetableCache[s.id] != null; // scheduled fallback loaded?
   routes.forEach(function(r){
     var st=getStyle(r.route_id),best=etas[r.route_id];
+    if(!best && schedKnown) return; // no bus approaching → covered by Programmati below
     var disp='&mdash;',delayHtml='',confidenceHtml='',vid='';
     var cardClass = 'sp-l';
-    
+    var aria = 'Linea ' + st.name + ', destinazione ' + (r.headsign ? r.headsign : 'Linea ' + st.name);
+
     if(best){
       disp=best.eta;
       vid=best.vid;
+      for(var vi=0;vi<lastVehicles.length;vi++){
+        if(String(lastVehicles[vi].id)===String(best.vid)){ liveTids[String(lastVehicles[vi].tid)]=true; break; }
+      }
+      aria += ', arrivo tra ' + best.eta + ' minuti';
       // Delay drives card color + ritardo/anticipo text (independent of confidence).
+      // MyCicero rule: on-time trips get a neutral card with no badge.
       // Unknown delay (null) → neutral card + explicit unknown badge, never assume on-time.
       if(best.delay != null && best.delay>60) {
         cardClass += ' sp-l--delayed';
         delayHtml='<div class="delay-badge delayed">'+Math.round(best.delay/60)+'\' ritardo</div>';
+        aria += ', ritardo di ' + Math.round(best.delay/60) + ' minuti';
       } else if(best.delay != null && best.delay<-60) {
         cardClass += ' sp-l--early';
         delayHtml='<div class="delay-badge early">'+Math.round(-best.delay/60)+'\' anticipo</div>';
-      } else if(best.delay != null) {
-        cardClass += ' sp-l--ontime';
-      } else {
+        aria += ', anticipo di ' + Math.round(-best.delay/60) + ' minuti';
+      } else if(best.delay == null) {
         delayHtml='<div class="delay-badge unknown">ritardo n/d</div>';
+        aria += ', ritardo sconosciuto';
+      } else {
+        aria += ', in orario';
       }
       // Confidence badge independent of delay
       if(best.confidence === 'low') {
         confidenceHtml = '<div style="display:flex;align-items:center;gap:4px;margin-top:4px"><span style="font-size:.6rem;color:var(--color-muted);font-weight:600;background:var(--color-paper-2);padding:2px 8px;border-radius:4px;border:1px solid var(--color-rule)">≈ stima</span></div>';
+        aria += ', dato stimato';
       } else if(best.confidence === 'unknown') {
         confidenceHtml = '<div style="display:flex;align-items:center;gap:4px;margin-top:4px"><span style="font-size:.6rem;color:var(--color-muted);font-weight:600;background:var(--color-paper-2);padding:2px 8px;border-radius:4px;border:1px solid var(--color-rule)">dati non verificati</span></div>';
+        aria += ', dati non verificati';
       } else {
         // high or missing → live pulse
         confidenceHtml = '<div class="live-pulse-container">' +
           '<div class="live-pulse"></div>' +
           '<div class="live-text">live</div>' +
           '</div>';
+        aria += ', mezzo monitorato in tempo reale';
       }
+    } else {
+      aria += ', nessun mezzo in arrivo al momento';
     }
-    
-    html+='<div class="'+cardClass+'" data-route="'+escapeHtml(r.route_id)+'" data-vid="'+escapeHtml(vid)+'">' +
+
+    liveHtml+='<div class="'+cardClass+'" role="button" tabindex="0" aria-label="'+escapeHtml(aria)+'" data-route="'+escapeHtml(r.route_id)+'" data-vid="'+escapeHtml(vid)+'">' +
       '<div class="left-col">' +
         '<div class="route-badge" style="background:'+st.bg+';color:'+st.fg+'">'+escapeHtml(st.name)+'</div>' +
         '<div class="info-col">' +
@@ -1172,16 +1300,88 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
       '<div class="right-col">' +
         '<div class="eta-box">' +
           '<span class="min-val">'+disp+'</span>' +
-          '<span class="eta-unit">&nbsp;min</span>' +
+          (best ? '<span class="eta-unit">&nbsp;min</span>' : '') +
         '</div>' +
         delayHtml + confidenceHtml +
       '</div>' +
     '</div>';
   });
-  if(!html)html='<div style="text-align:center;padding:20px;color:#71717a;font-size:.85rem">No buses nearby</div>';
+
+  // Scheduled fallback — MyCicero "Orario dei passaggi": upcoming programmed
+  // passes for today, with a live overlay when the trip is monitored.
+  var schedHtml='';
+  var sched = stopTimetableCache[s.id] || [];
+  var nowMin = romeNowMinutes();
+  var shownSched = 0;
+  for(var si=0; si<sched.length && shownSched<8; si++){
+    var p=sched[si];
+    if(!p || !p.trip_id) continue;
+    if(liveTids[String(p.trip_id)]) continue; // already shown above as live arrival
+    var pmins = arrivalToMinutes(p.arrival);
+    if(nowMin != null && pmins != null && pmins < nowMin - 10 && pmins < 24*60) continue; // departed
+    var pst=getStyle(p.route_id);
+    var ptime = shortTime(p.arrival);
+    var lv=null;
+    for(var li=0;li<lastVehicles.length;li++){ if(String(lastVehicles[li].tid)===String(p.trip_id)){ lv=lastVehicles[li]; break; } }
+    var rightInner, extraHtml='', monHtml='';
+    var ariaS = 'Passaggio programmato ore ' + (ptime || 'sconosciuta') + ', linea ' + pst.name +
+      ', destinazione ' + (p.headsign ? p.headsign : 'Linea ' + pst.name);
+    if(lv){
+      var einfo = (etas[p.route_id] && String(etas[p.route_id].vid)===String(lv.id)) ? etas[p.route_id] : null;
+      rightInner = einfo
+        ? '<span class="min-val">'+einfo.eta+'</span><span class="eta-unit">&nbsp;min</span>'
+        : '<span class="sched-val">'+escapeHtml(ptime || '—')+'</span>';
+      var ls = delayState(lv.delay);
+      monHtml = '<div class="live-pulse-container"><div class="live-pulse"></div><div class="live-text">live</div></div>';
+      if(ls==='delayed'){ extraHtml='<div class="delay-badge delayed">'+Math.round(lv.delay/60)+'\' ritardo</div>'; ariaS += ', mezzo monitorato, ritardo di ' + Math.round(lv.delay/60) + ' minuti'; }
+      else if(ls==='early'){ extraHtml='<div class="delay-badge early">'+Math.round(-lv.delay/60)+'\' anticipo</div>'; ariaS += ', mezzo monitorato, anticipo di ' + Math.round(-lv.delay/60) + ' minuti'; }
+      else if(ls==='unknown'){ extraHtml='<div class="delay-badge unknown">ritardo n/d</div>'; ariaS += ', mezzo monitorato, ritardo sconosciuto'; }
+      else { ariaS += ', mezzo monitorato in orario'; }
+    } else if(typeof p.delay === 'number'){
+      // Last-known realtime (trip left the feed): keep the badge like MyCicero.
+      rightInner = '<span class="sched-val">'+escapeHtml(ptime || '—')+'</span>';
+      var ps = delayState(p.delay);
+      if(ps==='delayed'){ extraHtml='<div class="delay-badge delayed">'+Math.round(p.delay/60)+'\' ritardo</div>'; ariaS += ', ritardo previsto di ' + Math.round(p.delay/60) + ' minuti'; }
+      else if(ps==='early'){ extraHtml='<div class="delay-badge early">'+Math.round(-p.delay/60)+'\' anticipo</div>'; ariaS += ', anticipo previsto di ' + Math.round(-p.delay/60) + ' minuti'; }
+      if(p.stale) ariaS += ' (ultimo dato disponibile)';
+    } else {
+      rightInner = '<span class="sched-val">'+escapeHtml(ptime || '—')+'</span>';
+      ariaS += ', mezzo non monitorato';
+    }
+    schedHtml+='<div class="sp-l" role="button" tabindex="0" aria-label="'+escapeHtml(ariaS)+'" data-trip="'+escapeHtml(p.trip_id)+'" data-route="'+escapeHtml(p.route_id)+'">' +
+      '<div class="left-col">' +
+        '<div class="route-badge" style="background:'+pst.bg+';color:'+pst.fg+'">'+escapeHtml(pst.name)+'</div>' +
+        '<div class="info-col">' +
+          '<div class="dest">'+escapeHtml(p.headsign ? p.headsign : 'Linea '+pst.name)+'</div>' +
+          '<div class="stop-sub">programmato '+escapeHtml(ptime || 'n/d')+'</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="right-col">' +
+        '<div class="eta-box">' + rightInner + '</div>' +
+        extraHtml + monHtml +
+      '</div>' +
+    '</div>';
+    shownSched++;
+  }
+
+  var html='';
+  if(liveHtml && schedHtml){
+    html = '<div class="sec-h">In arrivo • live</div>' + liveHtml + '<div class="sec-h">Programmati</div>' + schedHtml;
+  } else if(liveHtml){
+    html = liveHtml;
+  } else if(schedHtml){
+    html = '<div class="sec-h">Programmati</div>' + schedHtml;
+  } else {
+    html='<div style="text-align:center;padding:20px;color:#71717a;font-size:.85rem">Nessun passaggio programmato</div>';
+  }
   scEl.innerHTML=html;
   scEl.querySelectorAll('.sp-l').forEach(function(el){
-    el.onclick=function(){showRouteLine(el.dataset.route, el.dataset.vid);};
+    function go(){
+      if(el.dataset.trip){ openTripPanel(el.dataset.trip, el.dataset.route, s.id); }
+      else { showRouteLine(el.dataset.route, el.dataset.vid); }
+    }
+    el.onclick=go;
+    el.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } };
   });
 }
 
@@ -1254,6 +1454,8 @@ function updateMarkerVisibilities() {
     currentState = "stop_" + spStop.id;
   } else if (spVehicle) {
     currentState = "vehicle_" + spVehicle.id + "_" + (spVehicle.stopId || "");
+  } else if (spTrip) {
+    currentState = "trip_" + spTrip.tid;
   } else if (stopsVisible) {
     if (currentZoom >= 13) {
       currentState = "closed_visible";
@@ -1302,6 +1504,28 @@ function updateMarkerVisibilities() {
         m.on('click', function(e) { if(e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent); openStopPanel(s); });
         stopLayer.addLayer(m);
       });
+    } else if (spTrip) {
+      // Scheduled trip detail: show every stop of the trip shape.
+      var tdet = tripDetailCache[spTrip.tid];
+      var tsid = (tdet && tdet.shapeId) || (routeShapes[spTrip.rid] && routeShapes[spTrip.rid][0]);
+      var tseq = tsid ? (shapeStops[tsid] || []) : [];
+      var tstopMap = {};
+      stopData.forEach(function(st) { tstopMap[st.id] = st; });
+      tseq.forEach(function(stopId) {
+        var ts = tstopMap[stopId];
+        if (!ts) return;
+        var isHere = spTrip.stopId && String(spTrip.stopId) === String(stopId);
+        var tm = L.circleMarker([ts.lat, ts.lon], {
+          radius: isHere ? 6 : 4.5,
+          fillColor: isHere ? '#3b82f6' : '#000000',
+          color: '#ffffff',
+          weight: isHere ? 2 : 1.5,
+          fillOpacity: 1,
+          opacity: 1
+        });
+        tm.on('click', function(e) { if(e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent); openStopPanel(ts); });
+        stopLayer.addLayer(tm);
+      });
     } else {
       if (stopsVisible && currentZoom >= 13) {
         stopData.forEach(function(s) {
@@ -1339,6 +1563,10 @@ function updateMarkerVisibilities() {
       });
     } else if (spVehicle) {
       shouldShow = String(v.id) === String(spVehicle.id);
+    } else if (spTrip) {
+      var tripV = null;
+      for (var qi=0; qi<lastVehicles.length; qi++){ if(String(lastVehicles[qi].tid)===String(spTrip.tid)){ tripV=lastVehicles[qi]; break; } }
+      shouldShow = tripV ? String(v.id) === String(tripV.id) : true;
     } else {
       shouldShow = true;
     }
@@ -1479,6 +1707,7 @@ async function fetchData(){
     renderFeedStatus(status);
     renderStopPanel();
     renderVehiclePanel();
+    renderTripPanel();
     
     var ids={};
     vehicles.forEach(function(v){
