@@ -404,16 +404,6 @@ body {
   cursor: pointer;
 }
 
-/* Default / On Time state class */
-.sp-l.sp-l--ontime {
-  background: var(--tint-mint);
-  border-color: oklch(80% 0.16 150 / 0.35);
-}
-.sp-l.sp-l--ontime:hover {
-  background: oklch(80% 0.16 150 / 0.20);
-  border-color: oklch(80% 0.16 150 / 0.5);
-}
-
 /* Early state class */
 .sp-l.sp-l--early {
   background: var(--tint-cyan);
@@ -502,7 +492,6 @@ body {
   font-weight: 700;
   line-height: 1;
 }
-.sp-l.sp-l--ontime .min-val { color: var(--color-accent-text-ontime); }
 .sp-l.sp-l--early .min-val { color: var(--color-accent-text-early); }
 .sp-l.sp-l--delayed .min-val { color: var(--color-accent-text-delayed); }
 
@@ -999,7 +988,9 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
     '<a class="ext-link" href="https://moovitapp.com/?tll='+v.lat+'_'+v.lon+'" target="_blank" rel="noopener" title="Apri in Moovit">M</a></div>';
   
   var dState = delayState(v.delay);
-  var badgeText = delayLabel(v.delay);
+  // MyCicero rule: no badge when exactly on time — show it only for late/early/unknown.
+  var badgeHtml = (dState === 'ontime') ? '' :
+    '<div class="status-badge '+dState+'">'+escapeHtml(delayLabel(v.delay))+'</div>';
   var headExtra = '';
   // Next-stop schedule comparison in the header.
   var _detail = (v.tid && tripDetailCache[v.tid]) ? tripDetailCache[v.tid] : null;
@@ -1019,7 +1010,7 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
   } else if(dState === 'unknown'){
     headExtra = '<div class="sched-line">Dati di ritardo non disponibili per questa corsa.</div>';
   }
-  spAd.innerHTML = '<div class="status-badge '+dState+'">'+escapeHtml(badgeText)+'</div>' + headExtra;
+  spAd.innerHTML = badgeHtml + headExtra;
 
   var html = '';
   var sid = v.shapeId || (routeShapes[v.rid] && routeShapes[v.rid][0]);
@@ -1081,13 +1072,13 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
             etaText = etaInfo.eta + ' min';
           }
 
-          // Simple delay status per stop (per-stop delay, fallback to trip delay).
+          // Simple delay status per stop — shown only when late/early/unknown (MyCicero rule).
           var stopDelay = v.delay;
           if(_detail && _detail.stops && _detail.stops[String(stopId)] && _detail.stops[String(stopId)].delay != null){
             stopDelay = _detail.stops[String(stopId)].delay;
           }
           var schedSub = '';
-          if(!isPassed){
+          if(!isPassed && delayState(stopDelay) !== 'ontime'){
             schedSub = '<div class="sched-sub">' + escapeHtml(delayLabel(stopDelay)) + '</div>';
           }
           
@@ -1135,6 +1126,7 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
       disp=best.eta;
       vid=best.vid;
       // Delay drives card color + ritardo/anticipo text (independent of confidence).
+      // MyCicero rule: on-time trips get a neutral card with no badge.
       // Unknown delay (null) → neutral card + explicit unknown badge, never assume on-time.
       if(best.delay != null && best.delay>60) {
         cardClass += ' sp-l--delayed';
@@ -1142,9 +1134,7 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
       } else if(best.delay != null && best.delay<-60) {
         cardClass += ' sp-l--early';
         delayHtml='<div class="delay-badge early">'+Math.round(-best.delay/60)+'\' anticipo</div>';
-      } else if(best.delay != null) {
-        cardClass += ' sp-l--ontime';
-      } else {
+      } else if(best.delay == null) {
         delayHtml='<div class="delay-badge unknown">ritardo n/d</div>';
       }
       // Confidence badge independent of delay
