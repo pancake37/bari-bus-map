@@ -155,7 +155,7 @@ The included ZIP reader is cross-platform and uses pure JavaScript for stored an
 - **PowerShell fallback still present** — GTFS ZIP extraction is pure-JS first (works on any OS), with an `unzip` CLI fallback, and `PowerShell Expand-Archive` only as a last resort on Windows if both prior methods fail on an unusual archive. It's dead code on Linux/macOS and should trigger a proper error report if it's ever hit.
 - **In-memory state only** — vehicle/ETA caches live in process memory; running multiple server instances behind a load balancer will give each instance a different view of historical speeds.
 - **No authentication or rate limiting** on the API — fine for local/single-user use, not yet hardened for public multi-tenant deployment.
-- **Client map tiles** still load from CartoCDN (network required for basemap).
+- **Client map tiles** load from Esri Canvas basemaps (network required for basemap).
 - **OTP dashboard** is available as JSON API only (no dedicated UI).
 
 ## Roadmap
