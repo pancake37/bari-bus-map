@@ -787,9 +787,13 @@ var map = L.map('map',{center:[41.1055,16.8405],zoom:12,preferCanvas:true,zoomCo
 var activeTheme = localStorage.getItem('theme') || 'light';
 document.documentElement.setAttribute('data-theme', activeTheme);
 
-var baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/' + (activeTheme === 'light' ? 'light_all' : 'dark_all') + '/{z}/{x}/{y}{r}.png',{
-  maxZoom:20,
-  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+function getTileUrl(theme) {
+  return "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/" + (theme === "dark" ? "World_Dark_Gray_Base" : "World_Light_Gray_Base") + "/MapServer/tile/{z}/{y}/{x}";
+}
+var baseLayer = L.tileLayer(getTileUrl(activeTheme),{
+  maxZoom:19,
+  maxNativeZoom:16,
+  attribution:'&copy; <a href="https://www.esri.com/">Esri</a>, HERE, Garmin, &copy; OpenStreetMap contributors'
 }).addTo(map);
 
 // Controls
@@ -1471,7 +1475,7 @@ if (themeBtn) {
     document.documentElement.setAttribute('data-theme', newTheme);
     localStorage.setItem('theme', newTheme);
     themeBtn.querySelector('.icon').textContent = newTheme === 'light' ? '☀' : '🌙';
-    baseLayer.setUrl('https://{s}.basemaps.cartocdn.com/' + (newTheme === 'light' ? 'light_all' : 'dark_all') + '/{z}/{x}/{y}{r}.png');
+    baseLayer.setUrl(getTileUrl(newTheme));
   };
 }
 </script>
