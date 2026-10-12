@@ -436,6 +436,59 @@ function getTripTimetable(tid) {
     return tripTimetableCache[tid];
 }
 
+// ── Stop Timetable (upcoming scheduled passes for a stop, today) ──────────
+// Same role as MyCicero's "Orario dei passaggi": the scheduled fallback shown
+// when no live bus is approaching. Filtered by today's active services.
+
+function romeNowMinutes() {
+    try {
+        const parts = new Intl.DateTimeFormat('en-US', {
+            timeZone: GTFS_TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false
+        }).formatToParts(new Date());
+        let h = parseInt(parts.find(p => p.type === 'hour').value, 10);
+        const m = parseInt(parts.find(p => p.type === 'minute').value, 10);
+        if (isNaN(h) || isNaN(m)) return null;
+        h = ((h % 24) + 24) % 24; // '24' edge at midnight with hour12:false
+        return h * 60 + m;
+    } catch (e) { return null; }
+}
+
+function arrivalToMinutes(a) {
+    const p = String(a || '').split(':');
+    if (p.length < 2) return null;
+    const h = parseInt(p[0], 10), m = parseInt(p[1], 10);
+    if (isNaN(h) || isNaN(m)) return null;
+    return h * 60 + m; // may exceed 24*60 for after-midnight trips (kept on purpose)
+}
+
+function getStopTimetable(stopId, limit) {
+    const rows = (gtfsData.stopTimes && gtfsData.stopTimes[stopId]) || [];
+    const now = new Date();
+    const activeSids = hasServiceCalendar(gtfsData.calendar, gtfsData.calendarDates)
+        ? getActiveServiceIds(gtfsData.calendar, gtfsData.calendarDates, now, GTFS_TIME_ZONE) : null;
+    const sidMap = gtfsData.serviceIdMap || serviceIdMap;
+    const nowMin = romeNowMinutes();
+    const out = [];
+    rows.forEach(r => {
+        if (!r.trip_id) return;
+        if (activeSids && !activeSids.has(sidMap[r.trip_id])) return;
+        const mins = arrivalToMinutes(r.arrival);
+        if (mins == null) return;
+        // Keep passes not yet gone (10 min grace for just-departed); after-midnight
+        // times (>24h) always sort after this evening's passes.
+        if (nowMin != null && mins < nowMin - 10 && mins < 24 * 60) return;
+        out.push({
+            trip_id: r.trip_id,
+            route_id: r.route_id,
+            arrival: r.arrival || '',
+            headsign: r.headsign || '',
+            direction: r.direction || ''
+        });
+    });
+    out.sort((a, b) => arrivalToMinutes(a.arrival) - arrivalToMinutes(b.arrival));
+    return out.slice(0, limit || 12);
+}
+
 // ── Encoded Polyline (Google-style) ──────────────────────────────────────────
 
 function encodePolylineSigned(value) {
@@ -939,13 +992,19 @@ http.createServer((req, res) => {
         const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
         const detail = (tid && tripUpdatesCache[tid]) ? tripUpdatesCache[tid] : { delay: null, stops: {} };
         res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify({ tripId: tid, delay: detail.delay != null ? detail.delay : null, stops: detail.stops || {} }));
+        return res.end(JSON.stringify({ tripId: tid, delay: detail.delay != null ? detail.delay : null, stops: detail.stops || {}, shapeId: (tid && gtfsData.tripShapes[tid]) || '' }));
     }
     if (url.startsWith('/api/trip-timetable')) {
         const u = new URL(url, 'http://localhost');
         const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
         res.writeHead(200, staticHead);
         return res.end(JSON.stringify(getTripTimetable(tid)));
+    }
+    if (url.startsWith('/api/stop-timetable')) {
+        const u = new URL(url, 'http://localhost');
+        const stopId = u.searchParams.get('stopId') || u.searchParams.get('id') || '';
+        res.writeHead(200, dynamicHead);
+        return res.end(JSON.stringify(getStopTimetable(stopId, 12)));
     }
     if (url === '/api/stats') {
         res.writeHead(200, dynamicHead);
