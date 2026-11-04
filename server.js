@@ -74,6 +74,9 @@ function isAllowedStatic(relative) {
     if (norm.startsWith('assets/') && !norm.includes('..')) {
         return STATIC_ASSET_EXTS.has(path.extname(norm).toLowerCase());
     }
+    if (norm === 'mobilita' || norm === 'mobilita/' || norm.startsWith('mobilita/')) {
+        return !norm.split('/').includes('..') && (norm === 'mobilita' || norm.endsWith('/') || ['.html', '.js', '.css', '.json', '.gz'].includes(path.extname(norm).toLowerCase()));
+    }
     return false;
 }
 
@@ -1055,8 +1058,16 @@ http.createServer((req, res) => {
         return res.end(JSON.stringify(Object.assign({ pollInProgress }, realtimeStatus)));
     }
 
-    const pathname = new URL(url, 'http://localhost').pathname;
-    const file = path.resolve(__dirname, pathname === '/' ? 'index.html' : pathname.substring(1));
+    // A request target beginning with // is interpreted by URL as a network-path
+    // reference and throws. Treat it as a path so malformed clients cannot take
+    // down the server.
+    let pathname;
+    try { pathname = new URL(String(url || '/').replace(/^\/\//, '/'), 'http://localhost').pathname; }
+    catch (_) { res.writeHead(400); return res.end('Bad request'); }
+    const file = path.resolve(__dirname,
+        (pathname === '/' || pathname === '/index.html' || pathname === '/mobilita' || pathname === '/mobilita/') ? 'mobilita/index.html' :
+        (pathname === '/realtime' || pathname === '/realtime/') ? 'index.html' :
+        pathname.substring(1));
     const relative = path.relative(__dirname, file);
     const isSafe = !relative.startsWith('..') && !path.isAbsolute(relative) && isAllowedStatic(relative);
 
