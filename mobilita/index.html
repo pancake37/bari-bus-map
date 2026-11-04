@@ -2792,6 +2792,40 @@ body.live-map-mode .live-card-section {
   letter-spacing: .08em;
   text-transform: uppercase;
 }
+body.live-map-mode .live-passed-stops {
+  margin: 8px 0 2px;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+}
+body.live-map-mode .live-passed-stops > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+body.live-map-mode .live-passed-stops > summary::-webkit-details-marker { display: none; }
+body.live-map-mode .live-passed-stops > summary::before {
+  content: "+";
+  display: inline-grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1;
+}
+body.live-map-mode .live-passed-stops[open] > summary::before { content: "−"; }
+body.live-map-mode .live-passed-rows { opacity: .78; }
 body.live-map-mode .live-stop-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -5518,6 +5552,7 @@ let liveRoute = null, liveRouteShapeId = null, liveRouteRequest = 0, stopsVisibl
 let liveStops = [], liveStopsById = new Map(), liveStopInfo = {}, liveRouteShapes = {}, liveShapeStops = {};
 let liveEtas = {}, liveTripDelays = {}, liveStatus = {}, liveStopTimetables = new Map();
 const liveShapeCache = new Map(), liveShapePending = new Map(), liveRouteStopCache = new Map(), liveTripDetails = new Map(), liveTripTimetables = new Map(), liveTripPending = new Map();
+const expandedPastStopLists = new Set();
 function livePosition(vehicle, now = Date.now()) {
   const t = Math.max(0, Math.min(1, (now - vehicle._startedAt) / 10000));
   if (vehicle._shapePoints?.length > 1 && Number.isFinite(vehicle._fromShapeIndex) && Number.isFinite(vehicle._toShapeIndex)) {
@@ -5677,6 +5712,7 @@ function liveTripStopList(vehicle, trip) {
   let currentIndex = -1;
   const points = vehicle?._shapePoints || (shapeId && liveShapeCache.get(shapeId));
   if (vehicle && points?.length) currentIndex = closestShapeIndex(vehicle, points);
+  const currentStopIndex = vehicle ? sequence.indexOf(String(vehicle.stopId || "")) : -1;
   const routeStops = shapeId && points ? routeStopsForShape(shapeId, points) : [];
   const rows = sequence.map((stopId, index) => {
     const stop = liveStopsById.get(stopId) || { id: stopId, name: stopId, lat: NaN, lon: NaN };
@@ -5685,7 +5721,9 @@ function liveTripStopList(vehicle, trip) {
     const eta = etas[stopId]?.[String(vehicle?.rid || trip?.rid)];
     const estimate = realtime?.time != null ? formatEpochTime(realtime.time) : (eta && (!vehicle || String(eta.vid) === String(vehicle.vid ?? vehicle.id)) ? `tra ${eta.eta} min` : "—");
     const routeStop = routeStops.find((entry) => entry.stop.id === stopId);
-    const passed = vehicle && ((routeStop && currentIndex >= 0 && routeStop.pointIndex < currentIndex) || (!routeStop && vehicle.currentStopSequence != null && timetableByStop.get(stopId)?.sequence < vehicle.currentStopSequence));
+    const passed = vehicle && (currentStopIndex >= 0
+      ? index < currentStopIndex
+      : ((routeStop && currentIndex >= 0 && routeStop.pointIndex < currentIndex) || (!routeStop && vehicle.currentStopSequence != null && timetableByStop.get(stopId)?.sequence < vehicle.currentStopSequence)));
     return { stop, index, scheduled: formatGtfsTime(scheduled), estimate: passed ? "Già passata" : estimate, passed, delay: realtime?.delay ?? vehicle?.delay ?? null, eta: eta && (!vehicle || String(eta.vid) === String(vehicle.vid ?? vehicle.id)) ? eta.eta : null };
   });
   return rows;
@@ -5698,15 +5736,38 @@ function renderLiveTimeline(parent, vehicle, trip) {
     if (tid) fetchLiveTripData(tid);
     return;
   }
-  liveSection(parent, "Fermate · programmato / stimato");
-  rows.forEach((row) => {
+  const upcoming = rows.filter((row) => !row.passed);
+  const passed = rows.filter((row) => row.passed);
+  if (upcoming.length) liveSection(parent, "Prossime fermate · programmato / stimato");
+  else if (!passed.length) liveSection(parent, "Fermate · programmato / stimato");
+  const appendRow = (row, target = parent) => {
     const schedule = row.scheduled !== "—" ? `Programmato ${row.scheduled}` : "Orario programmato n/d";
     const estimate = row.estimate !== "—" ? ` · ${row.estimate}` : "";
     const detail = `${schedule}${estimate}${row.passed ? "" : delayState(row.delay) === "ontime" ? "" : ` · ${delayLabel(row.delay)}`}`;
-    liveStopRow(parent, row.stop.name, detail, row.eta != null && !row.passed ? `${row.eta} min` : (row.estimate === "Già passata" ? "Passata" : row.estimate), () => {
+    liveStopRow(target, row.stop.name, detail, row.eta != null && !row.passed ? `${row.eta} min` : (row.estimate === "Già passata" ? "Passata" : row.estimate), () => {
       if (Number.isFinite(Number(row.stop.lat)) && Number.isFinite(Number(row.stop.lon))) showLiveStop(stopPosition(row.stop));
     }, `${row.stop.name}, programmato ${row.scheduled}, stimato ${row.estimate}`, vehicle?.rid || trip?.rid);
-  });
+  };
+  upcoming.forEach((row) => appendRow(row));
+  if (passed.length) {
+    const key = tid || String(vehicle?.vid ?? vehicle?.id ?? "vehicle");
+    const disclosure = document.createElement("details");
+    disclosure.className = "live-passed-stops";
+    disclosure.open = expandedPastStopLists.has(key);
+    const summary = document.createElement("summary");
+    summary.textContent = `${disclosure.open ? "Nascondi" : "Mostra"} ${passed.length} fermate già passate`;
+    disclosure.append(summary);
+    const pastRows = document.createElement("div");
+    pastRows.className = "live-passed-rows";
+    passed.forEach((row) => appendRow(row, pastRows));
+    disclosure.append(pastRows);
+    parent.append(disclosure);
+    disclosure.addEventListener("toggle", () => {
+      summary.textContent = `${disclosure.open ? "Nascondi" : "Mostra"} ${passed.length} fermate già passate`;
+      if (disclosure.open) expandedPastStopLists.add(key);
+      else expandedPastStopLists.delete(key);
+    });
+  }
 }
 function renderLiveVehicleCard(vehicle) {
   if (!vehicle || !selectedLiveVehicle) return;
@@ -5732,8 +5793,11 @@ function renderLiveVehicleCard(vehicle) {
   } else if (vehicle.spd != null) {
     const speed = document.createElement("div"); speed.textContent = `Velocità ${Math.max(0, Number(vehicle.spd) * 3.6).toFixed(0)} km/h`; summary.append(speed);
   }
-  const list = $("live-card-stops"); list.replaceChildren();
+  const list = $("live-card-stops");
+  const scrollTop = list.scrollTop;
+  list.replaceChildren();
   renderLiveTimeline(list, vehicle, { tid: id && vehicle.tid, rid });
+  list.scrollTop = scrollTop;
   $("live-bus-card").hidden = false;
 }
 async function loadLiveStopTimetable(stopId) {
