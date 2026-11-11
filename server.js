@@ -46,7 +46,19 @@ const MIME = {
 
 const STATIC_ASSET_EXTS = new Set(['.html', '.js', '.css', '.png', '.jpg', '.jpeg', '.svg', '.webp', '.ico', '.gif']);
 
+const shapePolylineCache = new Map();
+function getCachedShapePolyline(id, pts) {
+    if (!id) return encodeShapePolyline(pts);
+    let cached = shapePolylineCache.get(id);
+    if (!cached) {
+        cached = encodeShapePolyline(pts);
+        shapePolylineCache.set(id, cached);
+    }
+    return cached;
+}
+
 function emptyGtfsData() {
+    shapePolylineCache.clear();
     return {
         cacheVersion: CACHE_VERSION,
         routes: {},
@@ -1016,7 +1028,7 @@ http.createServer((req, res) => {
             const head = Object.assign({}, staticHead, { 'Content-Type': 'text/plain; charset=utf-8' });
             if (id) {
                 const sh = gtfsData.shapes[id];
-                return sendJson(req, res, 200, head, sh ? encodeShapePolyline(sh) : '');
+                return sendJson(req, res, 200, head, sh ? getCachedShapePolyline(id, sh) : '');
             }
             return sendJson(req, res, 200, head, '');
         }
@@ -1094,8 +1106,23 @@ http.createServer((req, res) => {
         } else if (ext === '.gz' || ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.svg' || ext === '.webp') {
             headers['Cache-Control'] = 'public, max-age=31536000, immutable';
         }
-        res.writeHead(200, headers);
-        res.end(data);
+        const accept = req.headers['accept-encoding'] || '';
+        if (accept.includes('gzip') && ext !== '.gz' && data.length > 1024) {
+            zlib.gzip(data, (zerr, buf) => {
+                if (zerr) {
+                    res.writeHead(200, headers);
+                    return res.end(data);
+                }
+                res.writeHead(200, Object.assign({}, headers, {
+                    'Content-Encoding': 'gzip',
+                    'Content-Length': buf.length
+                }));
+                res.end(buf);
+            });
+        } else {
+            res.writeHead(200, headers);
+            res.end(data);
+        }
     });
 }).listen(PORT, () => {
     console.log('\n  🚌  Bari AMTAB Bus Map');

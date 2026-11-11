@@ -4594,29 +4594,55 @@ function worldFactory(focus) {
       cos,
   ];
 }
+class LazySegment {
+  constructor(s, world) {
+    Object.assign(this, s);
+    this._world = world;
+    this._points = null;
+    this._lengths = null;
+  }
+  get points() {
+    if (!this._points) this._points = this.coordinates.map(this._world);
+    return this._points;
+  }
+  get lengths() {
+    if (!this._lengths) {
+      const pts = this.points;
+      const len = [0];
+      for (let i = 1; i < pts.length; i++) {
+        len.push(
+          len[len.length - 1] +
+            Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]),
+        );
+      }
+      this._lengths = len;
+    }
+    return this._lengths;
+  }
+}
 function prepareScene(source) {
   const world = worldFactory(source.focus);
-  const segments = source.segments.map((s) => {
-    const points = s.coordinates.map(world),
-      lengths = [0];
-    for (let i = 1; i < points.length; i++)
-      lengths.push(
-        lengths.at(-1) +
-          Math.hypot(
-            points[i][0] - points[i - 1][0],
-            points[i][1] - points[i - 1][1],
-          ),
-      );
-    return { ...s, points, lengths };
-  });
+  const segments = (source.segments ?? []).map((s) => new LazySegment(s, world));
   const stops = buildStopIndex(source).map((s) => ({
     ...s,
     world: world(s.point),
   }));
-  const features = (source.basemap?.features ?? []).map((f) => ({
-      ...f,
-      points: f.coordinates.map(world),
-    })),
+  const features = (source.basemap?.features ?? []).map((f) => {
+      const points = f.coordinates.map(world);
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (let i = 0; i < points.length; i++) {
+        const pt = points[i];
+        if (pt[0] < minX) minX = pt[0];
+        if (pt[0] > maxX) maxX = pt[0];
+        if (pt[1] < minY) minY = pt[1];
+        if (pt[1] > maxY) maxY = pt[1];
+      }
+      return {
+        ...f,
+        points,
+        bbox: [minX, minY, maxX, maxY],
+      };
+    }),
     labels = (
       source.basemap?.labels ??
       source.stops.map((s) => ({
@@ -4637,13 +4663,6 @@ function prepareScene(source) {
     south = Infinity,
     east = -Infinity,
     north = -Infinity;
-  for (const s of segments)
-    for (const [x, y] of s.points) {
-      west = Math.min(west, x);
-      south = Math.min(south, y);
-      east = Math.max(east, x);
-      north = Math.max(north, y);
-    }
   const bounds = source.mapBounds ?? [
     source.focus[0] - 0.05,
     source.focus[1] - 0.05,
@@ -4659,6 +4678,15 @@ function prepareScene(source) {
     south = Math.min(south, y);
     east = Math.max(east, x);
     north = Math.max(north, y);
+  }
+  if (!source.mapBounds && features.length) {
+    for (let i = 0; i < features.length; i++) {
+      const bbox = features[i].bbox;
+      if (bbox[0] < west) west = bbox[0];
+      if (bbox[1] < south) south = bbox[1];
+      if (bbox[2] > east) east = bbox[2];
+      if (bbox[3] > north) north = bbox[3];
+    }
   }
   return {
     source,
@@ -4716,13 +4744,82 @@ function roadWidth(kind) {
   if (/tertiary/.test(kind)) return 2.8;
   return 1.6;
 }
+function getFrustumPlanes(camera, { width, height }) {
+  const { x: cx, y: cy, scale, bearing, pitch } = camera,
+    sin = Math.sin(bearing),
+    cos = Math.cos(bearing),
+    cp = Math.cos(pitch),
+    sp = Math.sin(pitch),
+    distance = height / (0.8 * scale),
+    ox = width / 2,
+    oy = height * 0.53;
+  const K = scale * distance;
+
+  const x_camX_dx = cos, y_camX_dy = -sin, c_camX = -(cx * cos - cy * sin);
+  const x_camY_dx = sin, y_camY_dy = cos, c_camY = -(cx * sin + cy * cos);
+
+  const l_cx = K, l_cy = (ox + 60) * sp, l_c = (ox + 60) * distance;
+  const r_cx = -K, r_cy = (width + 60 - ox) * sp, r_c = (width + 60 - ox) * distance;
+  const t_cx = 0, t_cy = (oy + 60) * sp - cp * K, t_c = (oy + 60) * distance;
+  const b_cx = 0, b_cy = (height + 60 - oy) * sp + cp * K, b_c = (height + 60 - oy) * distance;
+  const n_cx = 0, n_cy = sp, n_c = distance * 0.88;
+
+  const rawPlanes = [
+    [l_cx, l_cy, l_c],
+    [r_cx, r_cy, r_c],
+    [t_cx, t_cy, t_c],
+    [b_cx, b_cy, b_c],
+    [n_cx, n_cy, n_c],
+  ];
+
+  return rawPlanes.map(([c_x, c_y, c_const]) => {
+    const A = c_x * x_camX_dx + c_y * x_camY_dx;
+    const B = c_x * y_camX_dy + c_y * y_camY_dy;
+    const C = c_x * c_camX + c_y * c_camY + c_const;
+    const pxIdx = A >= 0 ? 2 : 0;
+    const pyIdx = B >= 0 ? 3 : 1;
+    return [A, B, C, pxIdx, pyIdx];
+  });
+}
 function drawBackground(ctx, scene, p, view, camera, labelExclusions) {
   const { width, height } = view,
     zoom = camera ? camera.scale / camera.base : 1,
     visible = [];
   ctx.fillStyle = basemap.paper;
   ctx.fillRect(0, 0, width, height);
+  const is2D = !camera || (!camera.pitch && !camera.bearing);
+  let camMinX, camMaxX, camMinY, camMaxY;
+  if (is2D && camera) {
+    const ox = width / 2,
+      oy = height * 0.53;
+    camMinX = camera.x - (ox + 60) / camera.scale;
+    camMaxX = camera.x + (width + 60 - ox) / camera.scale;
+    camMinY = camera.y - (height + 60 - oy) / camera.scale;
+    camMaxY = camera.y + (oy + 60) / camera.scale;
+  }
+  const planes = !is2D && camera ? getFrustumPlanes(camera, view) : null;
   for (const f of scene.features) {
+    if (f.bbox) {
+      if (is2D && camera) {
+        if (
+          f.bbox[2] < camMinX ||
+          f.bbox[0] > camMaxX ||
+          f.bbox[3] < camMinY ||
+          f.bbox[1] > camMaxY
+        )
+          continue;
+      } else if (planes) {
+        let outside = false;
+        for (let i = 0; i < planes.length; i++) {
+          const pl = planes[i];
+          if (pl[0] * f.bbox[pl[3]] + pl[1] * f.bbox[pl[4]] + pl[2] < 0) {
+            outside = true;
+            break;
+          }
+        }
+        if (outside) continue;
+      }
+    }
     const screen = f.points.map((point) => p.project(point));
     if (onScreen(screen, width, height)) visible.push({ ...f, screen });
   }
@@ -5987,7 +6084,6 @@ $("close-live-bus").addEventListener("click", closeLiveVehicle);
 loadLiveStaticData();
 refreshLiveVehicles();
 setInterval(refreshLiveVehicles, 10000);
-setInterval(() => { if (liveVehicles.some((v) => Date.now() - v._startedAt < 10000)) schedule(); }, 220);
 const areas = groupAreas(manifest.cities);
 const failedAssets = new Set();
 const cache = new Map(),
@@ -6088,6 +6184,74 @@ async function boundedBytes(response, limit) {
   }
   return result;
 }
+const IDB_NAME = "mobilita_city_cache";
+const IDB_STORE = "cities";
+const IDB_VERSION = 1;
+
+function openCityDB() {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE, { keyPath: "id" });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function getCachedCity(id, sha256) {
+  try {
+    const db = await openCityDB();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_STORE, "readonly");
+        const store = tx.objectStore(IDB_STORE);
+        const req = store.get(id);
+        req.onsuccess = () => {
+          const res = req.result;
+          if (res && res.sha256 === sha256 && res.source) {
+            resolve(res.source);
+          } else {
+            resolve(null);
+          }
+        };
+        req.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function setCachedCity(id, sha256, source) {
+  try {
+    const db = await openCityDB();
+    if (!db) return;
+    new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        const store = tx.objectStore(IDB_STORE);
+        store.put({ id, sha256, source });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  } catch {}
+}
+
 async function decodeCity(id) {
   if (cache.has(id)) {
     const s = cache.get(id);
@@ -6105,6 +6269,20 @@ async function decodeCity(id) {
     { signal } = controller;
   const task = (async () => {
     const entry = manifest.cities.find((c) => c.id === id);
+    if (entry?.asset) {
+      try {
+        const cachedSource = await getCachedCity(id, entry.asset.sha256);
+        if (cachedSource && cachedSource.id === id) {
+          signal.throwIfAborted();
+          const result = prepareScene(cachedSource);
+          cache.set(id, result);
+          while (cache.size > 2) cache.delete(cache.keys().next().value);
+          return result;
+        }
+      } catch (err) {
+        if (signal.aborted) throw err;
+      }
+    }
     let bytes;
     if (entry?.asset) {
       const asset = entry.asset;
@@ -6170,6 +6348,9 @@ async function decodeCity(id) {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(expanded);
     const source = JSON.parse(text);
     if (source.id !== id) throw Error("Il file appartiene a un’altra città.");
+    if (entry?.asset) {
+      setCachedCity(id, entry.asset.sha256, source);
+    }
     const result = prepareScene(source);
     cache.set(id, result);
     while (cache.size > 2) cache.delete(cache.keys().next().value);
@@ -7164,10 +7345,18 @@ function drawFrame() {
       scale.firstElementChild.textContent = label;
     scale.lastElementChild.style.width = stats.scale.pixels + "px";
   }
+  if (!document.hidden && liveVehicles.some((v) => Date.now() - v._startedAt < 10000)) {
+    schedule();
+  }
 }
 function schedule() {
   if (!frame) frame = requestAnimationFrame(drawFrame);
 }
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && liveVehicles.some((v) => Date.now() - v._startedAt < 10000)) {
+    schedule();
+  }
+});
 function setTouch(value) {
   touchMode = value;
   shell.dataset.touch = String(value);
