@@ -3,6 +3,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const zlib = require('zlib');
 const { parseCSVLine } = require('./lib/csv');
 const { extractZip } = require('./lib/zip');
 const { dateToGtfsStr, getActiveServiceIds, hasServiceCalendar, rebuildRouteShapes, rebuildStopInfo } = require('./lib/calendar');
@@ -966,96 +967,104 @@ function initRealtime() {
 
 // ── Server ───────────────────────────────────────────────────────────────────
 
+function sendJson(req, res, statusCode, headers, data) {
+    const json = typeof data === 'string' ? data : JSON.stringify(data);
+    const accept = (req.headers && req.headers['accept-encoding']) || '';
+    if (accept.includes('gzip') && json.length > 1024) {
+        zlib.gzip(Buffer.from(json, 'utf8'), (err, buf) => {
+            if (err) {
+                res.writeHead(statusCode, headers);
+                return res.end(json);
+            }
+            res.writeHead(statusCode, Object.assign({}, headers, {
+                'Content-Encoding': 'gzip',
+                'Content-Length': buf.length
+            }));
+            res.end(buf);
+        });
+    } else {
+        res.writeHead(statusCode, headers);
+        res.end(json);
+    }
+}
+
 http.createServer((req, res) => {
     const staticHead = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600' };
     const dynamicHead = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' };
     const url = req.url;
 
     if (url === '/api/vehicles') {
-        res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify(vehiclesCache));
+        return sendJson(req, res, 200, dynamicHead, vehiclesCache);
     }
     if (url === '/api/trip-updates') {
-        res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify(delaysCache));
+        return sendJson(req, res, 200, dynamicHead, delaysCache);
     }
     if (url === '/api/etas') {
-        // Response: { [stopId]: { [routeId]: { eta, delay, vid, confidence } } }
-        // confidence: 'high' | 'low' | 'unknown'
-        // compared in trip stop_sequence space (GTFS-RT CurrentStopSequence)
-        res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify(etasCache));
+        return sendJson(req, res, 200, dynamicHead, etasCache);
     }
     if (url === '/api/routes') {
-        res.writeHead(200, staticHead);
-        return res.end(JSON.stringify(gtfsData.routes));
+        return sendJson(req, res, 200, staticHead, gtfsData.routes);
     }
     if (url === '/api/stops') {
-        res.writeHead(200, staticHead);
-        return res.end(JSON.stringify(gtfsData.stops));
+        return sendJson(req, res, 200, staticHead, gtfsData.stops);
     }
     if (url.startsWith('/api/shapes')) {
         const u = new URL(url, 'http://localhost');
         const id = u.searchParams.get('id');
         const encoded = u.searchParams.get('encoded') === '1';
-        res.writeHead(200, encoded ? Object.assign({}, staticHead, { 'Content-Type': 'text/plain; charset=utf-8' }) : staticHead);
+        if (encoded) {
+            const head = Object.assign({}, staticHead, { 'Content-Type': 'text/plain; charset=utf-8' });
+            if (id) {
+                const sh = gtfsData.shapes[id];
+                return sendJson(req, res, 200, head, sh ? encodeShapePolyline(sh) : '');
+            }
+            return sendJson(req, res, 200, head, '');
+        }
         if (id) {
             const sh = gtfsData.shapes[id];
-            if (!sh) return res.end('[]');
-            if (encoded) return res.end(encodeShapePolyline(sh));
-            return res.end(JSON.stringify(sh));
-        } else {
-            return res.end(JSON.stringify(gtfsData.shapes));
+            return sendJson(req, res, 200, staticHead, sh ? JSON.stringify(sh) : '[]');
         }
+        return sendJson(req, res, 200, staticHead, gtfsData.shapes);
     }
     if (url === '/api/stop-info') {
-        res.writeHead(200, staticHead);
-        return res.end(JSON.stringify(gtfsData.stopInfo));
+        return sendJson(req, res, 200, staticHead, gtfsData.stopInfo);
     }
     if (url === '/api/route-shapes') {
-        res.writeHead(200, staticHead);
-        return res.end(JSON.stringify(gtfsData.routeShapes));
+        return sendJson(req, res, 200, staticHead, gtfsData.routeShapes);
     }
     if (url === '/api/shape-stops') {
-        res.writeHead(200, staticHead);
-        return res.end(JSON.stringify(gtfsData.stopSequence));
+        return sendJson(req, res, 200, staticHead, gtfsData.stopSequence);
     }
     if (url === '/api/otp') {
-        res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify(otpCache));
+        return sendJson(req, res, 200, dynamicHead, otpCache);
     }
     if (url.startsWith('/api/trip-detail')) {
         const u = new URL(url, 'http://localhost');
         const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
         const detail = tripDetailWithHistory(tid);
-        res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify({ tripId: tid, delay: detail.delay, stops: detail.stops, stale: detail.stale, shapeId: (tid && gtfsData.tripShapes[tid]) || '' }));
+        return sendJson(req, res, 200, dynamicHead, { tripId: tid, delay: detail.delay, stops: detail.stops, stale: detail.stale, shapeId: (tid && gtfsData.tripShapes[tid]) || '' });
     }
     if (url.startsWith('/api/trip-timetable')) {
         const u = new URL(url, 'http://localhost');
         const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
-        res.writeHead(200, staticHead);
-        return res.end(JSON.stringify(getTripTimetable(tid)));
+        return sendJson(req, res, 200, staticHead, getTripTimetable(tid));
     }
     if (url.startsWith('/api/stop-timetable')) {
         const u = new URL(url, 'http://localhost');
         const stopId = u.searchParams.get('stopId') || u.searchParams.get('id') || '';
-        res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify(getStopTimetable(stopId, 12)));
+        return sendJson(req, res, 200, dynamicHead, getStopTimetable(stopId, 12));
     }
     if (url === '/api/stats') {
-        res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify({
+        return sendJson(req, res, 200, dynamicHead, {
             vehicles: vehiclesCache.length,
             etasStops: Object.keys(etasCache).length,
             obsToday: obsCount,
             histRoutes: Object.keys(histSpeed).length,
             logDate
-        }));
+        });
     }
     if (url === '/api/status') {
-        res.writeHead(200, dynamicHead);
-        return res.end(JSON.stringify(Object.assign({ pollInProgress }, realtimeStatus)));
+        return sendJson(req, res, 200, dynamicHead, Object.assign({ pollInProgress }, realtimeStatus));
     }
 
     // A request target beginning with // is interpreted by URL as a network-path
@@ -1082,6 +1091,8 @@ http.createServer((req, res) => {
         const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
         if (ext === '.html' || ext === '.js' || ext === '.css') {
             headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0';
+        } else if (ext === '.gz' || ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.svg' || ext === '.webp') {
+            headers['Cache-Control'] = 'public, max-age=31536000, immutable';
         }
         res.writeHead(200, headers);
         res.end(data);
