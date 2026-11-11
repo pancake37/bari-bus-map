@@ -12,11 +12,13 @@
     "ecmaVersion": 12,
     "sourceType": "script"
   },
-  "ignorePatterns": ["assets/vendor/"],
+  "ignorePatterns": ["assets/vendor/", "_ref/**"],
   "plugins": ["html"],
   "rules": {
     "no-unused-vars": "warn",
     "no-console": "off",
-    "no-empty": "off"
+    "no-empty": "off",
+    "no-constant-condition": ["error", { "checkLoops": false }],
+    "no-control-regex": "off"
   }
 }
