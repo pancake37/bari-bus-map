@@ -7,7 +7,7 @@ const { parseCSVLine } = require('./lib/csv');
 const { extractZip } = require('./lib/zip');
 const { dateToGtfsStr, getActiveServiceIds, hasServiceCalendar, rebuildRouteShapes, rebuildStopInfo } = require('./lib/calendar');
 
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const GTFS_ZIP = path.join(__dirname, 'google_transit.zip');
 const CACHE = path.join(__dirname, '.gtfs-cache.json');
 const DATA_DIR = path.join(__dirname, 'data');
