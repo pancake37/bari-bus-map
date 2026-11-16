@@ -318,6 +318,7 @@
       height: 8px;
       border-radius: 50%;
       border: 2px solid var(--muted);
+      flex-shrink: 0;
     }
     .timeline-dot.passed { background: var(--muted); }
     .timeline-dot.next { border-color: #bd5636; background: #bd5636; }
@@ -369,7 +370,7 @@
             <div id="bus-card-vid" style="font-size: 12px; color: var(--muted);">Bus #1234</div>
           </div>
         </div>
-        <button class="card-close" id="bus-card-close">×</button>
+        <button class="card-close" id="bus-card-close" title="Chiudi (Esc)">×</button>
       </div>
       <div class="card-body">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
@@ -387,7 +388,7 @@
           <div id="stop-card-name" style="font-weight: 700; font-size: 15px;">Nome Fermata</div>
           <div id="stop-card-id" style="font-size: 12px; color: var(--muted);">Fermata #1001</div>
         </div>
-        <button class="card-close" id="stop-card-close">×</button>
+        <button class="card-close" id="stop-card-close" title="Chiudi (Esc)">×</button>
       </div>
       <div class="card-body">
         <div style="font-weight: 600; font-size: 12px; text-transform: uppercase; color: var(--muted); margin-bottom: 8px;">Prossimi arrivi</div>
@@ -400,7 +401,9 @@
   <script>
     const BARI_CENTER = [16.871871, 41.117143];
     let isDark = localStorage.getItem("bari-bus-map-theme") === "dark";
-    if (isDark) document.documentElement.dataset.theme = "dark";
+    if (isDark) {
+      document.documentElement.dataset.theme = "dark";
+    }
 
     const STYLES = {
       light: "https://tiles.openfreemap.org/styles/positron",
@@ -425,8 +428,9 @@
     // Route Colors
     const ROUTE_COLORS = {
       "01": "#e11d48", "02": "#2563eb", "03": "#16a34a", "04": "#d97706", "06": "#9333ea",
-      "11": "#0891b2", "12": "#ea580c", "13": "#4f46e5", "14": "#059669", "16": "#db2777",
-      "20": "#65a30d", "21": "#475569", "22": "#ca8a04", "27": "#7c3aed", "53": "#0284c7"
+      "11": "#0891b2", "11/": "#0891b2", "12": "#ea580c", "12/": "#ea580c", "13": "#4f46e5",
+      "14": "#059669", "16": "#db2777", "20": "#65a30d", "21": "#475569", "22": "#ca8a04",
+      "27": "#7c3aed", "53": "#0284c7"
     };
     function getRouteColor(rid) {
       return ROUTE_COLORS[String(rid)] || "#475569";
@@ -441,6 +445,8 @@
     let stopsVisible = false;
     let routesData = {};
     let stopsData = [];
+    let stopsMap = new Map(); // id -> stop name
+    let shapeStopsData = {}; // shapeId -> [stopId, ...]
     const shapeCache = new Map();
     let animFrame = 0;
 
@@ -611,12 +617,13 @@
         id: "stops-circle",
         type: "circle",
         source: "stops",
+        minzoom: 11,
         layout: { "visibility": "none" },
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 3, 16, 6],
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 2.5, 14, 4.5, 17, 7],
           "circle-color": "#ffffff",
-          "circle-stroke-color": "#334155",
-          "circle-stroke-width": 1.8
+          "circle-stroke-color": "#0f172a",
+          "circle-stroke-width": 2
         }
       });
 
@@ -625,19 +632,19 @@
         id: "stops-label",
         type: "symbol",
         source: "stops",
-        minzoom: 15,
+        minzoom: 14.5,
         layout: {
           "visibility": "none",
           "text-field": ["get", "name"],
           "text-size": 11,
           "text-offset": [0, 1.2],
           "text-anchor": "top",
-          "text-max-width": 8
+          "text-max-width": 9
         },
         paint: {
-          "text-color": "#1e293b",
+          "text-color": "#0f172a",
           "text-halo-color": "#ffffff",
-          "text-halo-width": 1.5
+          "text-halo-width": 2
         }
       });
 
@@ -680,18 +687,33 @@
       } catch { return null; }
     }
 
+    function closeStopCard() {
+      document.getElementById("stop-card").style.display = "none";
+    }
+    document.getElementById("stop-card-close").onclick = closeStopCard;
+
+    function closeVehicleCard() {
+      selectedVehicleId = null;
+      document.getElementById("bus-card").style.display = "none";
+      map.getSource("route-line")?.setData({ type: "FeatureCollection", features: [] });
+      drawOverlay();
+    }
+    document.getElementById("bus-card-close").onclick = closeVehicleCard;
+
     // Vehicle click & route display
     async function selectVehicle(id) {
       selectedVehicleId = id;
       const v = vehicles.get(id);
       if (!v) return;
 
+      closeStopCard();
       document.getElementById("bus-card").style.display = "flex";
-      document.getElementById("bus-card-badge").textContent = v.route_short_name || v.rid;
+      const lineShort = v.route_short_name || v.rid;
+      document.getElementById("bus-card-badge").textContent = lineShort;
       document.getElementById("bus-card-badge").style.backgroundColor = getRouteColor(v.rid);
       document.getElementById("bus-card-vid").textContent = "Mezzo #" + (v.vid ?? v.id);
 
-      const speed = v.speed != null ? Math.round(Number(v.speed)) : null;
+      const speed = v.spd != null ? Math.round(Number(v.spd)) : (v.speed != null ? Math.round(Number(v.speed)) : null);
       document.getElementById("bus-card-speed").textContent = speed != null && speed > 0 ? (speed + " km/h") : "Fermo / In sosta";
 
       const delay = v.delay != null ? Number(v.delay) : null;
@@ -710,6 +732,11 @@
         delayEl.className = "delay-pill delay-early";
       }
 
+      // Initial destination placeholder based on route data
+      const rMeta = routesData[v.rid] || routesData[lineShort];
+      const defaultDest = rMeta?.route_long_name || ("Linea " + lineShort);
+      document.getElementById("bus-card-dest").textContent = defaultDest;
+
       // Draw route on MapLibre GPU layer (preserving current camera zoom without zooming out)
       const shapeId = v.shapeId;
       if (shapeId) {
@@ -723,53 +750,86 @@
         }
       }
 
-      // Fetch timetable timeline
+      // Timeline placeholder
+      document.getElementById("bus-card-timeline").innerHTML = '<div style="color: var(--muted); font-size: 13px;">Caricamento fermate…</div>';
+
+      // Fetch timetable & destination
+      let gotTimetable = false;
       if (v.tid) {
-        fetch("/api/trip-detail?tripId=" + encodeURIComponent(v.tid))
-          .then(r => r.json())
-          .then(detail => {
-            if (detail?.destination) document.getElementById("bus-card-dest").textContent = detail.destination;
-            renderTimeline(detail?.stops || []);
-          })
-          .catch(() => {});
+        try {
+          const r = await fetch("/api/trip-detail?tripId=" + encodeURIComponent(v.tid));
+          if (r.ok) {
+            const detail = await r.json();
+            if (detail?.destination) {
+              document.getElementById("bus-card-dest").textContent = detail.destination;
+            }
+            if (Array.isArray(detail?.timetable) && detail.timetable.length > 0) {
+              renderTimeline(detail.timetable, v.currentStopSequence);
+              gotTimetable = true;
+            }
+          }
+        } catch {}
+      }
+
+      // Fallback: use shapeStopsData if timetable wasn't available
+      if (!gotTimetable && shapeId && shapeStopsData[shapeId]) {
+        const stopIds = shapeStopsData[shapeId];
+        const fallbackStops = stopIds.map((sid, idx) => ({
+          stop_id: sid,
+          stop_name: stopsMap.get(sid) || ("Fermata #" + sid),
+          sequence: idx + 1
+        }));
+        if (fallbackStops.length > 0) {
+          document.getElementById("bus-card-dest").textContent = fallbackStops[fallbackStops.length - 1].stop_name;
+          renderTimeline(fallbackStops, v.currentStopSequence);
+          gotTimetable = true;
+        }
+      }
+
+      if (!gotTimetable) {
+        renderTimeline([], null);
       }
 
       drawOverlay();
     }
 
-    function renderTimeline(stops) {
+    function renderTimeline(stops, currentSeq) {
       const container = document.getElementById("bus-card-timeline");
       container.innerHTML = "";
-      if (!stops.length) {
+      if (!stops || !stops.length) {
         container.innerHTML = '<div style="color: var(--muted); font-size: 13px;">Nessuna fermata disponibile</div>';
         return;
       }
-      stops.slice(0, 15).forEach((st, idx) => {
+
+      let upcoming = stops;
+      const seqNum = Number(currentSeq);
+      if (Number.isFinite(seqNum) && seqNum > 0) {
+        const filtered = stops.filter(st => st.sequence == null || st.sequence >= seqNum);
+        if (filtered.length > 0) upcoming = filtered;
+      }
+
+      upcoming.slice(0, 15).forEach((st, idx) => {
         const item = document.createElement("div");
         item.className = "timeline-item";
+        const isNext = idx === 0;
+        const sName = st.stop_name || st.name || stopsMap.get(String(st.stop_id)) || ("Fermata #" + st.stop_id);
+        const arrTime = st.arrival ? st.arrival.slice(0, 5) : "";
         item.innerHTML = `
           <div class="timeline-stop-name">
-            <span class="timeline-dot ${idx === 0 ? 'next' : ''}"></span>
-            <span>${st.stop_name || st.name}</span>
+            <span class="timeline-dot ${isNext ? 'next' : ''}"></span>
+            <span style="${isNext ? 'font-weight: 700;' : ''}">${sName}</span>
           </div>
-          <span style="font-weight: 600; font-size: 12px; color: var(--muted);">${st.arrival_time?.slice(0, 5) || ''}</span>
+          <span style="font-weight: 600; font-size: 12px; color: ${isNext ? 'var(--ink)' : 'var(--muted)'};">${arrTime}</span>
         `;
         container.appendChild(item);
       });
     }
 
-    function closeVehicleCard() {
-      selectedVehicleId = null;
-      document.getElementById("bus-card").style.display = "none";
-      map.getSource("route-line")?.setData({ type: "FeatureCollection", features: [] });
-      drawOverlay();
-    }
-    document.getElementById("bus-card-close").onclick = closeVehicleCard;
-
     // Show Stop Card
     async function showStopCard(stopId, stopName) {
+      closeVehicleCard();
       document.getElementById("stop-card").style.display = "flex";
-      document.getElementById("stop-card-name").textContent = stopName;
+      document.getElementById("stop-card-name").textContent = stopName || stopsMap.get(String(stopId)) || ("Fermata #" + stopId);
       document.getElementById("stop-card-id").textContent = "Fermata #" + stopId;
 
       const container = document.getElementById("stop-card-arrivals");
@@ -800,11 +860,7 @@
       }
     }
 
-    document.getElementById("stop-card-close").onclick = () => {
-      document.getElementById("stop-card").style.display = "none";
-    };
-
-    // Canvas click interaction
+    // Canvas click interaction: select bus or deselect if clicking empty space
     map.getCanvasContainer().addEventListener("click", (e) => {
       const rect = map.getContainer().getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -822,6 +878,30 @@
       }
       if (hitId) {
         selectVehicle(hitId);
+      } else {
+        // Check if user clicked on a rendered stop circle
+        const bbox = [[x - 6, y - 6], [x + 6, y + 6]];
+        const stopFeatures = map.queryRenderedFeatures(bbox, { layers: ["stops-circle"] });
+        if (!stopFeatures || !stopFeatures.length) {
+          // Empty space clicked: deselect both vehicle and stop cards!
+          closeVehicleCard();
+          closeStopCard();
+        }
+      }
+    });
+
+    // Prevent clicks inside UI cards and controls from propagating to map canvas
+    document.getElementById("bus-card").addEventListener("click", e => e.stopPropagation());
+    document.getElementById("stop-card").addEventListener("click", e => e.stopPropagation());
+    document.querySelector(".search-box").addEventListener("click", e => e.stopPropagation());
+    document.querySelector(".map-controls").addEventListener("click", e => e.stopPropagation());
+
+    // ESC key closes cards
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeVehicleCard();
+        closeStopCard();
+        document.getElementById("search-results").style.display = "none";
       }
     });
 
@@ -871,23 +951,40 @@
       fetch("/api/stops")
         .then(r => r.json())
         .then(stops => {
-          stopsData = stops;
-          const geojson = {
+          stopsData = stops || [];
+          stopsMap = new Map();
+          const features = [];
+          stopsData.forEach(s => {
+            const sid = String(s.id ?? s.stop_id ?? "");
+            const sname = s.name ?? s.stop_name ?? ("Fermata #" + sid);
+            const lon = Number(s.lon ?? s.stop_lon);
+            const lat = Number(s.lat ?? s.stop_lat);
+            stopsMap.set(sid, sname);
+            if (Number.isFinite(lon) && Number.isFinite(lat)) {
+              features.push({
+                type: "Feature",
+                properties: { id: sid, name: sname },
+                geometry: { type: "Point", coordinates: [lon, lat] }
+              });
+            }
+          });
+          map.getSource("stops")?.setData({
             type: "FeatureCollection",
-            features: stops.map(s => ({
-              type: "Feature",
-              properties: { id: String(s.stop_id), name: s.stop_name },
-              geometry: { type: "Point", coordinates: [Number(s.stop_lon), Number(s.stop_lat)] }
-            }))
-          };
-          map.getSource("stops")?.setData(geojson);
+            features
+          });
         })
         .catch(() => {});
 
       // Load static routes
       fetch("/api/routes")
         .then(r => r.json())
-        .then(routes => { routesData = routes; })
+        .then(routes => { routesData = routes || {}; })
+        .catch(() => {});
+
+      // Load shape stops sequence mapping
+      fetch("/api/shape-stops")
+        .then(r => r.json())
+        .then(ss => { shapeStopsData = ss || {}; })
         .catch(() => {});
     }
 
@@ -915,6 +1012,10 @@
       map.once("styledata", () => {
         initMapSources();
         drawOverlay();
+        if (stopsVisible) {
+          map.setLayoutProperty("stops-circle", "visibility", "visible");
+          map.setLayoutProperty("stops-label", "visibility", "visible");
+        }
       });
     };
 
@@ -929,16 +1030,32 @@
       const matches = [];
       // Match lines
       for (const [rid, r] of Object.entries(routesData)) {
-        if (String(r.route_short_name || rid).toLowerCase().includes(q) || String(r.route_long_name || "").toLowerCase().includes(q)) {
-          matches.push({ type: "route", id: rid, title: "Linea " + (r.route_short_name || rid), sub: r.route_long_name });
+        const shortName = String(r.route_short_name || rid || "");
+        const longName = String(r.route_long_name || "");
+        if (shortName.toLowerCase().includes(q) || longName.toLowerCase().includes(q) || rid.toLowerCase().includes(q)) {
+          matches.push({
+            type: "route",
+            id: rid,
+            title: "Linea " + shortName,
+            sub: longName || ("Percorso linea " + shortName)
+          });
         }
       }
       // Match stops
       for (const s of stopsData) {
-        if (s.stop_name.toLowerCase().includes(q) || String(s.stop_id).includes(q)) {
-          matches.push({ type: "stop", id: s.stop_id, title: s.stop_name, sub: "Fermata #" + s.stop_id, lat: s.stop_lat, lon: s.stop_lon });
+        const sName = String(s.name ?? s.stop_name ?? "");
+        const sId = String(s.id ?? s.stop_id ?? "");
+        if (sName.toLowerCase().includes(q) || sId.includes(q)) {
+          matches.push({
+            type: "stop",
+            id: sId,
+            title: sName,
+            sub: "Fermata #" + sId,
+            lat: s.lat ?? s.stop_lat,
+            lon: s.lon ?? s.stop_lon
+          });
         }
-        if (matches.length > 20) break;
+        if (matches.length > 25) break;
       }
 
       if (!matches.length) {
@@ -957,7 +1074,7 @@
             <div style="font-size: 12px; color: var(--muted);">${m.sub || ''}</div>
           </div>
         `;
-        el.onclick = () => {
+        el.onclick = async () => {
           searchResults.style.display = "none";
           searchInput.value = "";
           if (m.type === "stop") {
@@ -965,8 +1082,25 @@
             showStopCard(m.id, m.title);
           } else {
             // Find live vehicle of this route or show route
-            const v = Array.from(vehicles.values()).find(veh => String(veh.rid) === String(m.id));
-            if (v) selectVehicle(String(v.vid ?? v.id));
+            const v = Array.from(vehicles.values()).find(veh => String(veh.rid) === String(m.id) || String(veh.route_short_name) === String(m.id));
+            if (v) {
+              selectVehicle(String(v.vid ?? v.id));
+            } else {
+              try {
+                const rshapes = await fetch("/api/route-shapes").then(res => res.json());
+                const shapes = rshapes[m.id];
+                if (shapes && shapes.length > 0) {
+                  const coords = await loadShape(shapes[0]);
+                  if (coords && coords.length > 1) {
+                    map.getSource("route-line")?.setData({
+                      type: "Feature",
+                      properties: { color: getRouteColor(m.id) },
+                      geometry: { type: "LineString", coordinates: coords }
+                    });
+                  }
+                }
+              } catch {}
+            }
           }
         };
         searchResults.appendChild(el);

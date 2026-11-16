@@ -158,7 +158,8 @@ function isAllowedStatic(relative) {
 
 let gtfsData = emptyGtfsData();
 let vehiclesCache = [], delaysCache = {}, tripUpdatesCache = {}, etasCache = {}, otpCache = {};
-let tripTimetableCache = {}; // trip_id → [{stop_id, arrival, sequence}] sorted by sequence
+let tripTimetableCache = {}; // trip_id → [{stop_id, stop_name, arrival, sequence}] sorted by sequence
+let tripHeadsignCache = {}; // trip_id → headsign string
 // Last-known realtime per trip, retained across polls (MyCicero keeps realtime
 // per solution even after the trip drops out of the feed).
 let tripDelayHistory = {}; // tid → {delay, stops, updatedAt}
@@ -506,6 +507,13 @@ function buildStopSequences() {
 
 function buildTripTimetable() {
     tripTimetableCache = {};
+    tripHeadsignCache = {};
+    const stopNameMap = {};
+    if (Array.isArray(gtfsData.stops)) {
+        gtfsData.stops.forEach(s => {
+            if (s && s.id) stopNameMap[s.id] = s.name || s.id;
+        });
+    }
     const stopTimes = gtfsData.stopTimes || {};
     Object.keys(stopTimes).forEach(stopId => {
         const rows = stopTimes[stopId];
@@ -514,9 +522,13 @@ function buildTripTimetable() {
             const tid = r.trip_id;
             if (!tid) return;
             if (!tripTimetableCache[tid]) tripTimetableCache[tid] = [];
+            if (r.headsign && !tripHeadsignCache[tid]) {
+                tripHeadsignCache[tid] = r.headsign;
+            }
             const seqMap = gtfsData.tripStopSeq && gtfsData.tripStopSeq[tid];
             tripTimetableCache[tid].push({
                 stop_id: stopId,
+                stop_name: stopNameMap[stopId] || ('Fermata ' + stopId),
                 arrival: r.arrival || '',
                 sequence: (seqMap && seqMap[stopId] != null) ? seqMap[stopId] : null
             });
@@ -529,6 +541,9 @@ function buildTripTimetable() {
             if (b.sequence != null) return 1;
             return String(a.arrival).localeCompare(String(b.arrival));
         });
+        if (!tripHeadsignCache[tid] && tripTimetableCache[tid].length > 0) {
+            tripHeadsignCache[tid] = tripTimetableCache[tid][tripTimetableCache[tid].length - 1].stop_name;
+        }
     });
 }
 
@@ -1134,7 +1149,17 @@ http.createServer((req, res) => {
         const u = new URL(url, 'http://localhost');
         const tid = u.searchParams.get('tripId') || u.searchParams.get('id') || '';
         const detail = tripDetailWithHistory(tid);
-        return sendJson(req, res, 200, dynamicHead, { tripId: tid, delay: detail.delay, stops: detail.stops, stale: detail.stale, shapeId: (tid && gtfsData.tripShapes[tid]) || '' });
+        const timetable = getTripTimetable(tid);
+        const destination = (tid && tripHeadsignCache[tid]) || (timetable.length > 0 ? timetable[timetable.length - 1].stop_name : '');
+        return sendJson(req, res, 200, dynamicHead, {
+            tripId: tid,
+            delay: detail.delay,
+            stops: detail.stops,
+            stale: detail.stale,
+            shapeId: (tid && gtfsData.tripShapes[tid]) || '',
+            destination,
+            timetable
+        });
     }
     if (url.startsWith('/api/trip-timetable')) {
         const u = new URL(url, 'http://localhost');
