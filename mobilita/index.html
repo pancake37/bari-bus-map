@@ -3081,10 +3081,6 @@ body.live-map-mode .workspace .map-shell {
         </div>
         <div class="top-tools">
           <button id="toggle-stops" class="live-map-action" type="button" aria-pressed="false">Fermate</button>
-          <div class="views" role="group" aria-label="Vista mappa">
-            <button id="mode3d" aria-pressed="false" disabled>3D</button
-            ><button id="mode2d" aria-pressed="true" disabled>2D</button>
-          </div>
           <details class="camera-panel" id="camera-panel">
             <summary aria-label="Impostazioni vista">
               Vista
@@ -3096,14 +3092,14 @@ body.live-map-mode .workspace .map-shell {
             </summary>
             <div class="camera-options">
               <label
-                >Rotazione <output id="bearing-value">−5°</output
+                >Rotazione <output id="bearing-value">0°</output
                 ><input
                   id="bearing"
                   aria-label="Rotazione mappa"
                   type="range"
                   min="-180"
                   max="180"
-                  value="-5"
+                  value="0"
               /></label>
               <div class="rotation-buttons">
                 <button
@@ -3122,27 +3118,6 @@ body.live-map-mode .workspace .map-shell {
                   </svg>
                 </button>
               </div>
-              <label
-                >Inclinazione <output id="pitch-value">2D</output
-                ><input
-                  id="pitch"
-                  aria-label="Inclinazione mappa"
-                  type="range"
-                  min="15"
-                  max="65"
-                  value="55"
-              /></label>
-              <label
-                >Rilievo <output id="relief-value">100%</output
-                ><input
-                  id="relief"
-                  aria-label="Ampiezza rilievi"
-                  type="range"
-                  min="40"
-                  max="160"
-                  step="10"
-                  value="100"
-              /></label>
               <label
                 >Zoom <output id="zoom-value">100%</output
                 ><input
@@ -3947,14 +3922,24 @@ function limitedScale(camera, scale) {
   return clamp(scale, min, max);
 }
 function projection(camera, { width, height }) {
-  const { x: cx, y: cy, scale, bearing, pitch } = camera,
-    sin = Math.sin(bearing),
+  const { x: cx, y: cy, scale, bearing, pitch } = camera;
+  const ox = width / 2,
+    oy = height * 0.53;
+  if (!pitch && !bearing) {
+    return {
+      project(point) {
+        return [ox + (point[0] - cx) * scale, oy - (point[1] - cy) * scale];
+      },
+      unproject(x, y) {
+        return [cx + (x - ox) / scale, cy - (y - oy) / scale];
+      },
+    };
+  }
+  const sin = Math.sin(bearing),
     cos = Math.cos(bearing),
     cp = Math.cos(pitch),
     sp = Math.sin(pitch),
-    distance = height / (0.8 * scale),
-    ox = width / 2,
-    oy = height * 0.53;
+    distance = height / (0.8 * scale);
   return {
     project(point, elevation = 0) {
       const dx = point[0] - cx,
@@ -5623,7 +5608,7 @@ let lastView = view(),
     y: 0,
     base: baseScale(lastView),
     scale: baseScale(lastView),
-    bearing: (-5 * Math.PI) / 180,
+    bearing: 0,
     pitch: 0,
   };
 let scene = null,
@@ -5638,7 +5623,7 @@ let scene = null,
   selectedStop = null,
   tablePage = 0,
   mode3d = false,
-  pitchDegrees = 55,
+  pitchDegrees = 0,
   relief = 1,
   frame = 0,
   requestId = 0,
@@ -5651,7 +5636,9 @@ let liveEtas = {}, liveTripDelays = {}, liveStatus = {}, liveStopTimetables = ne
 const liveShapeCache = new Map(), liveShapePending = new Map(), liveRouteStopCache = new Map(), liveTripDetails = new Map(), liveTripTimetables = new Map(), liveTripPending = new Map();
 const expandedPastStopLists = new Set();
 function livePosition(vehicle, now = Date.now()) {
-  const t = Math.max(0, Math.min(1, (now - vehicle._startedAt) / 10000));
+  const elapsed = now - vehicle._startedAt;
+  const alpha = Math.max(0, Math.min(1, elapsed / 1600));
+  const t = 1 - Math.pow(1 - alpha, 3);
   if (vehicle._shapePoints?.length > 1 && Number.isFinite(vehicle._fromShapeIndex) && Number.isFinite(vehicle._toShapeIndex)) {
     const point = pointOnShape(vehicle._shapePoints, vehicle._fromShapeIndex + (vehicle._toShapeIndex - vehicle._fromShapeIndex) * t);
     if (point) return { ...vehicle, ...point };
@@ -6026,8 +6013,17 @@ async function showLiveVehicle(vehicle) {
     const current = liveVehicles.find((v) => String(v.vid ?? v.id) === id) || vehicle;
     liveRoute = { rid: current.rid, points, shapeId, vehicleId: id, stops: makeLiveRouteStops(shapeId, points) };
     schedule();
-    const worldPoints = points.map((point) => scene.world([Number(point.lon), Number(point.lat)])).filter((point) => point.every(Number.isFinite));
-    if (worldPoints.length > 1) updateCamera(fitCamera(cam, view(), worldPoints, { padding: 64, insets: { left: canvas.clientWidth > 560 ? Math.min(400, canvas.clientWidth * 0.34) : 0 } }));
+    // Preserve user zoom: do not force full-route citywide zoom out!
+    const vehicleWorld = scene?.world ? scene.world([Number(current.lon), Number(current.lat)]) : null;
+    if (vehicleWorld && vehicleWorld.every(Number.isFinite)) {
+      const proj = projection(cam, view()).project(vehicleWorld);
+      const v = view();
+      const insets = canvas.clientWidth > 560 ? Math.min(400, canvas.clientWidth * 0.34) : 0;
+      const isVisible = proj && proj[0] >= insets + 40 && proj[0] <= v.width - 40 && proj[1] >= 40 && proj[1] <= v.height - 40;
+      if (!isVisible) {
+        focusPoint(vehicleWorld, cam.scale);
+      }
+    }
   } catch { if (request === liveRouteRequest) notice("Percorso del bus non disponibile.", true); }
   schedule();
 }
@@ -6095,8 +6091,6 @@ const cache = new Map(),
     "clear-route",
     "stop-search",
     "share-view",
-    "mode3d",
-    "mode2d",
     "center",
     "fit",
     "zoom-in",
@@ -6107,8 +6101,6 @@ const cache = new Map(),
     "reset",
     "toggle-stops",
     "bearing",
-    "pitch",
-    "relief",
     "zoom",
   ];
 function notice(message, context = false) {
@@ -6435,8 +6427,6 @@ async function selectCity(id, restored = null) {
       button.disabled = !scene.segments.length;
     $("stop-search").disabled = !scene.stops.length;
     $("route").disabled = !scene.segments.length;
-    $("pitch").disabled = !mode3d;
-    $("relief").disabled = !mode3d;
     renderInspector();
     home();
     updateData();
@@ -7180,12 +7170,6 @@ function syncControls() {
     "aria-valuetext",
     fmt((cam.scale / cam.base) * 100, 0) + "%",
   );
-  $("pitch").value = pitchDegrees;
-  $("pitch-value").textContent = mode3d ? fmt(pitchDegrees, 0) + "°" : "2D";
-  $("relief").value = relief * 100;
-  $("relief-value").textContent = fmt(relief * 100, 0) + "%";
-  $("pitch").disabled = busy || !mode3d;
-  $("relief").disabled = busy || !mode3d;
 }
 function updateCamera(next) {
   hideMapTip();
@@ -7300,17 +7284,12 @@ function zoomBy(
 ) {
   updateCamera(zoomCamera(cam, view(), factor, [x, y]));
 }
-function setMode(value) {
-  mode3d = value;
-  $("mode3d").setAttribute("aria-pressed", String(value));
-  $("mode2d").setAttribute("aria-pressed", String(!value));
-  updateCamera({ ...cam, pitch: value ? (pitchDegrees * Math.PI) / 180 : 0 });
-}
+function setMode() {}
 function resetView() {
-  pitchDegrees = 55;
+  pitchDegrees = 0;
   relief = 1;
-  cam.bearing = (-5 * Math.PI) / 180;
-  setMode(false);
+  cam.bearing = 0;
+  cam.pitch = 0;
   home();
 }
 function drawFrame() {
@@ -7357,7 +7336,7 @@ function drawFrame() {
   const now = Date.now();
   const hasMovingVehicles = liveVehicles.some((v) => {
     const isMoving = Math.abs(v._toLat - v._fromLat) > 1e-5 || Math.abs(v._toLon - v._fromLon) > 1e-5;
-    return isMoving && (now - v._startedAt < 10000);
+    return isMoving && (now - v._startedAt < 1600);
   });
   if (!document.hidden && hasMovingVehicles) {
     schedule();
@@ -7513,15 +7492,10 @@ canvas.addEventListener("pointermove", (event) => {
         moved = true;
       if (moved) {
         if (event.shiftKey) {
-          if (mode3d)
-            pitchDegrees = Math.max(
-              15,
-              Math.min(65, pitchDegrees + (point[1] - previous[1]) * 0.15),
-            );
           updateCamera({
             ...cam,
             bearing: cam.bearing + (point[0] - previous[0]) * 0.008,
-            pitch: mode3d ? (pitchDegrees * Math.PI) / 180 : 0,
+            pitch: 0,
           });
         } else updateCamera(panCamera(cam, view(), previous, point));
       }
@@ -7667,13 +7641,6 @@ canvas.addEventListener("keydown", (event) => {
         bearing:
           cam.bearing + ((event.key === "ArrowLeft" ? -1 : 1) * Math.PI) / 12,
       });
-    else if (mode3d) {
-      pitchDegrees = Math.max(
-        15,
-        Math.min(65, pitchDegrees + (event.key === "ArrowUp" ? 5 : -5)),
-      );
-      updateCamera({ ...cam, pitch: (pitchDegrees * Math.PI) / 180 });
-    }
     return;
   }
   const from = [canvas.clientWidth / 2, canvas.clientHeight * 0.53],
@@ -7920,8 +7887,6 @@ $("page-next").onclick = () => {
   tablePage++;
   renderTable();
 };
-$("mode3d").onclick = () => setMode(true);
-$("mode2d").onclick = () => setMode(false);
 $("center").onclick = home;
 $("fit").onclick = fit;
 $("reset").onclick = resetView;
@@ -7937,15 +7902,6 @@ $("bearing").oninput = () =>
     ...cam,
     bearing: (Number($("bearing").value) * Math.PI) / 180,
   });
-$("pitch").oninput = () => {
-  pitchDegrees = Number($("pitch").value);
-  updateCamera({ ...cam, pitch: (pitchDegrees * Math.PI) / 180 });
-};
-$("relief").oninput = () => {
-  relief = Number($("relief").value) / 100;
-  syncControls();
-  schedule();
-};
 $("zoom").oninput = () =>
   zoomBy(((Number($("zoom").value) / 100) * cam.base) / cam.scale);
 $("expand").onclick = toggleExpanded;

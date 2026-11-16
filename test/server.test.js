@@ -89,11 +89,13 @@ describe('server endpoints and security', () => {
             assert.equal(res2.status, 200);
         });
 
-        it('serves legacy leaflet app at /realtime and /realtime/', async () => {
+        it('redirects /realtime and /realtime/ to /', async () => {
             const res = await fetch('/realtime');
-            assert.equal(res.status, 200);
-            assert.ok(res.headers['content-type'].includes('text/html'));
-            assert.ok(res.text().includes('leaflet'));
+            assert.equal(res.status, 302);
+            assert.equal(res.headers.location, '/');
+            const res2 = await fetch('/realtime/');
+            assert.equal(res2.status, 302);
+            assert.equal(res2.headers.location, '/');
         });
 
         it('serves static assets with correct MIME type', async () => {

@@ -1165,9 +1165,12 @@ http.createServer((req, res) => {
     let pathname;
     try { pathname = new URL(String(url || '/').replace(/^\/\//, '/'), 'http://localhost').pathname; }
     catch (_) { res.writeHead(400); return res.end('Bad request'); }
+    if (pathname === '/realtime' || pathname === '/realtime/') {
+        res.writeHead(302, { Location: '/' });
+        return res.end();
+    }
     const file = path.resolve(__dirname,
         (pathname === '/' || pathname === '/index.html' || pathname === '/mobilita' || pathname === '/mobilita/') ? 'mobilita/index.html' :
-        (pathname === '/realtime' || pathname === '/realtime/') ? 'index.html' :
         pathname.substring(1));
     const relative = path.relative(__dirname, file);
     const isSafe = !relative.startsWith('..') && !path.isAbsolute(relative) && isAllowedStatic(relative);
