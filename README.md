@@ -7,7 +7,7 @@
 [![ESLint](https://github.com/pancake37/bari-bus-map/actions/workflows/eslint.yml/badge.svg)](https://github.com/pancake37/bari-bus-map/actions/workflows/eslint.yml)
 ![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
-![Canvas](https://img.shields.io/badge/map-Canvas%20%2B%20OpenStreetMap-168a9b)
+![MapLibre](https://img.shields.io/badge/map-MapLibre%20GL%20%2B%20OpenFreeMap-0078A8?logo=maplibre&logoColor=white)
 
 <p align="center">
   <img src="assets/demo.png" alt="Live AMTAB buses on the Bari map" width="49%">
@@ -20,7 +20,7 @@
 
 ## What is this?
 
-The home page shows **AMTAB buses moving live around Bari** on a lightweight Canvas map. Select a bus to see its route and stop-by-stop schedule and estimates; the next stops appear first, while past stops stay tucked away until opened. The map also lets you toggle stops and change the view.
+The home page shows **AMTAB buses moving live around Bari** on a hardware-accelerated WebGL map (MapLibre GL + OpenFreeMap). Select a bus to see its route (dashed traversed path and solid remaining path) along with real-time stop-by-stop schedule and estimates; the next stops appear first, while past stops stay tucked away until opened. The map also lets you search lines or stops and toggle stop markers.
 
 Behind the map, the server builds a **directed graph of every route shape**, projects each GPS ping onto it, and predicts arrivals using live speed and self-learned historical averages.
 
@@ -30,9 +30,9 @@ No React. No build step. No database. Just `node server.js` and a browser tab.
 
 | | |
 |---|---|
-| **Live bus map** | Shows current AMTAB vehicle positions over an OpenStreetMap-derived base map. Selecting a bus draws its route and opens its upcoming stops and arrival estimates. |
+| **Live bus map** | Shows current AMTAB vehicle positions over free OpenFreeMap vector tiles. Selecting a bus highlights its route (dashed traveled path, solid upcoming path) and opens its stop timetable with live estimates. |
 | **Upcoming-first stop list** | Already-passed stops are collapsed by default; open the disclosure to review them. |
-| **Map controls** | Toggle stops, switch between 2D and 3D, adjust the view, or return to the city center. The default camera is 2D, centered, at −5° rotation with full relief and base zoom. |
+| **Map controls** | Toggle stops, zoom, or center on user location. Fast, north-up 2D vector map locked for optimal performance and clarity. |
 | **Geometric ETA engine** | Projects each vehicle onto a directed graph of the route shape (not a straight line to the next stop) and predicts downstream arrivals segment-by-segment, blending instantaneous GPS speed with a self-learned historical average per route and time-of-day block. |
 | **Confidence-scored predictions** | Cross-checks the geometric projection against the GTFS-RT `CurrentStopSequence` field. If they disagree by more than one stop, the ETA is flagged `low` confidence in the API and shown as an estimate in the UI instead of a live pulse. |
 | **Schedule vs realtime status** | The bus card compares programmed and estimated arrival per stop, and shows late / early / unknown from GTFS-RT delays. |
@@ -43,8 +43,8 @@ No React. No build step. No database. Just `node server.js` and a browser tab.
 | **Road-snapped animation** | Buses animate along the actual route geometry between GPS updates (via waypoint interpolation), instead of cutting straight through city blocks. |
 | **Self-learning speed model** | Historical average speed per route/time-block updates online from every observed GPS ping — no offline training step, no static lookup table. |
 | **Graceful degradation** | If the AMTAB real-time feed hiccups, the server serves a 5-minute-TTL backup instead of an empty map. |
-| **Light/dark theme** | Toggles the UI and Canvas map styling; choice persists across sessions via `localStorage`. |
-| **Minimalist map design** | A bundled OpenStreetMap-derived map keeps streets, stops and vehicles easy to distinguish. |
+| **Light/dark theme** | Toggles the UI and vector map styling (Positron light / Dark style); choice persists across sessions via `localStorage`. |
+| **Live search & radar pin** | Search for buses (grouped by direction) or stops with live upcoming countdowns and an on-map pulsating radar pin. |
 | **On-demand route shapes** | Route shapes are fetched as needed for active buses and cached by the browser. |
 | **One-tap deep links** | Stop and vehicle panels link straight out to Google Maps / Moovit by coordinates. |
 
@@ -69,8 +69,8 @@ flowchart TB
         RT --> API
     end
 
-    subgraph Frontend["mobilita/index.html — Canvas, no build step"]
-        Map["OpenStreetMap-derived Canvas map"]
+    subgraph Frontend["mobilita/index.html — MapLibre GL, no build step"]
+        Map["MapLibre GL WebGL map + OpenFreeMap tiles"]
         Markers["Road-snapped vehicle markers"]
         Panel["Bus / stop cards"]
         Line["Selected route and upcoming stops"]
@@ -149,8 +149,8 @@ Note: `VechiclePosition` is the spelling used by the AMTAB endpoint. Its TripUpd
 
 Static HTTP only serves:
 
-- `/` → the Canvas live map in `mobilita/index.html`
-- `/realtime/` → the previous Leaflet interface
+- `/` → the live map in `mobilita/index.html`
+- `/realtime/` → redirects to `/`
 - `/assets/**` and `/mobilita/**` with safe static file extensions
 
 **Not** exposed: `server.js`, `.gtfs-cache.json`, `google_transit.zip`, `data/*` observation logs, `.git/`, etc.
@@ -174,16 +174,16 @@ The included ZIP reader is cross-platform and uses pure JavaScript for stored an
 ## Roadmap
 
 - [ ] Automatic re-download of `google_transit.zip` from AMTAB (the current 24h refresh only re-parses the local copy already on disk — it doesn't fetch a new one over the network)
-- [ ] Search bar for finding a stop or line by name/number, instead of only clicking on the map
+- [x] Search bar for finding a stop or line by name/number, with direction context and map pin
 - [ ] Favorite/starred stops, saved across sessions
 
 ## Project layout
 
 ```
 server.js           HTTP + GTFS + ETA + OTP
-mobilita/index.html Canvas live map, bus cards, stop list and map controls
+mobilita/index.html MapLibre live map, bus cards, stop list and map controls
 mobilita/cities/    Bundled Bari map data
-index.html          Previous Leaflet interface, available at /realtime/
+index.html          Redirects to /
 lib/csv.js          CSV line parser
 lib/zip.js          ZIP extract (JS-first, with CLI/PowerShell fallbacks)
 lib/calendar.js     Service-calendar logic (timezone-aware, calendar_dates-only feeds)
