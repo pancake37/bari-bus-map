@@ -5,7 +5,8 @@
     "node": true
   },
   "globals": {
-    "L": "readonly"
+    "L": "readonly",
+    "maplibregl": "readonly"
   },
   "extends": "eslint:recommended",
   "parserOptions": {

@@ -1171,6 +1171,7 @@ http.createServer((req, res) => {
     }
     const file = path.resolve(__dirname,
         (pathname === '/' || pathname === '/index.html' || pathname === '/mobilita' || pathname === '/mobilita/') ? 'mobilita/index.html' :
+        pathname.startsWith('/cities/') ? ('mobilita' + pathname) :
         pathname.substring(1));
     const relative = path.relative(__dirname, file);
     const isSafe = !relative.startsWith('..') && !path.isAbsolute(relative) && isAllowedStatic(relative);
