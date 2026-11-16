@@ -190,7 +190,7 @@ async function main() {
         console.log('✔ Detected modern MapLibre WebGL GPU-accelerated engine');
 
         // Extract and benchmark polyline decoder
-        const polylineMatch = html.match(/function decodePolyline\([\s\S]*?\n    \}/);
+        const polylineMatch = html.match(/function decodePolyline\([\s\S]*?\n {4}\}/);
         if (polylineMatch) {
             const polylineFn = new Function('encoded', polylineMatch[0] + '\nreturn decodePolyline(encoded);');
             const samplePoly = '_p~iF~ps|U_ulLnnqC_mqNvxq`@';
@@ -204,7 +204,7 @@ async function main() {
         }
 
         // Benchmark vehicle position interpolation (1.6s cubic ease-out)
-        const interpMatch = html.match(/function currentVehiclePosition\([\s\S]*?\n    \}/);
+        const interpMatch = html.match(/function currentVehiclePosition\([\s\S]*?\n {4}\}/);
         if (interpMatch) {
             const interpFn = new Function('v', 'now', interpMatch[0] + '\nreturn currentVehiclePosition(v, now);');
             const sampleV = { lon: 16.87, lat: 41.11, _fromLon: 16.86, _fromLat: 41.10, _startedAt: performance.now() - 400 };
