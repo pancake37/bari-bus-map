@@ -825,6 +825,23 @@
       });
     }
 
+    function minutesUntil(arrivalStr) {
+      if (!arrivalStr) return null;
+      const parts = arrivalStr.split(':').map(Number);
+      if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return null;
+      const now = new Date();
+      const romeTimeStr = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Rome',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      }).format(now);
+      const [currH, currM] = romeTimeStr.split(':').map(Number);
+      let diff = (parts[0] * 60 + parts[1]) - (currH * 60 + currM);
+      if (diff < -720) diff += 1440;
+      return diff;
+    }
+
     // Show Stop Card
     async function showStopCard(stopId, stopName) {
       closeVehicleCard();
@@ -843,15 +860,50 @@
           container.innerHTML = '<div style="color: var(--muted); font-size: 13px;">Nessun arrivo nelle prossime ore</div>';
           return;
         }
-        arrivals.slice(0, 8).forEach(arr => {
+        arrivals.slice(0, 10).forEach(arr => {
           const item = document.createElement("div");
           item.className = "timeline-item";
+          const headsign = arr.headsign || arr.trip_headsign || "Capolinea";
+          const rObj = routesData[arr.route_id];
+          const line = rObj?.route_short_name || arr.route_short_name || arr.route_id;
+          const time = arr.arrival ? arr.arrival.slice(0, 5) : (arr.arrival_time ? arr.arrival_time.slice(0, 5) : "");
+          const mins = minutesUntil(arr.arrival || arr.arrival_time);
+          const isLive = arr.monitored === true;
+
+          let countdownText = time;
+          if (mins != null && mins <= 0) {
+            countdownText = "In arrivo";
+          } else if (mins != null && mins <= 60) {
+            countdownText = `${mins} min`;
+          }
+
+          let delayBadge = "";
+          if (arr.delay != null) {
+            const delayMin = Math.round(arr.delay / 60);
+            if (arr.delay > 120) {
+              delayBadge = `<span class="delay-pill delay-late" style="font-size: 10px; padding: 1px 5px;">+${delayMin}'</span>`;
+            } else if (arr.delay < -60) {
+              delayBadge = `<span class="delay-pill delay-early" style="font-size: 10px; padding: 1px 5px;">${delayMin}'</span>`;
+            } else {
+              delayBadge = `<span class="delay-pill delay-on-time" style="font-size: 10px; padding: 1px 5px;">In orario</span>`;
+            }
+          }
+
           item.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span class="route-pill" style="background: ${getRouteColor(arr.route_id)}; font-size: 12px; padding: 2px 7px;">${arr.route_short_name || arr.route_id}</span>
-              <span style="font-weight: 500;">${arr.trip_headsign || ''}</span>
+            <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+              <span class="route-pill" style="background: ${getRouteColor(arr.route_id)}; font-size: 11px; padding: 2px 7px; flex-shrink: 0;">${line}</span>
+              <div style="min-width: 0; display: flex; flex-direction: column;">
+                <span style="font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${headsign}</span>
+                <span style="font-size: 11px; color: var(--muted);">${isLive ? '● Live GPS' : 'Orario programmato'}</span>
+              </div>
             </div>
-            <span style="font-weight: 700; font-size: 13px;">${arr.arrival_time?.slice(0, 5) || ''}</span>
+            <div style="display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; margin-left: 8px; gap: 2px;">
+              <span style="font-weight: 700; font-size: 13px; color: ${isLive ? '#166534' : 'var(--ink)'};">${countdownText}</span>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                <span style="font-size: 11px; color: var(--muted);">${time}</span>
+                ${delayBadge}
+              </div>
+            </div>
           `;
           container.appendChild(item);
         });
