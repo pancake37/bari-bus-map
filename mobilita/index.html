@@ -6312,18 +6312,21 @@ async function decodeCity(id) {
           throw Error(
             "File della città non disponibile (HTTP " + response.status + ").",
           );
-        bytes = await boundedBytes(response, asset.bytes);
-        if (bytes.length !== asset.bytes)
-          throw Error("Dimensione del file città non valida.");
-        const digest = [
-          ...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-        ]
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("");
-        if (digest !== asset.sha256)
-          throw Error(
-            "Il file della città non supera la verifica di integrità.",
-          );
+        bytes = await boundedBytes(response, Math.max(asset.bytes, 64 * 1024 ** 2));
+        const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+        if (isGzip) {
+          if (bytes.length !== asset.bytes)
+            throw Error("Dimensione del file città non valida.");
+          const digest = [
+            ...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+          ]
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
+          if (digest !== asset.sha256)
+            throw Error(
+              "Il file della città non supera la verifica di integrità.",
+            );
+        }
         failedAssets.delete(asset.path);
       } catch (error) {
         if (!signal.aborted) failedAssets.add(asset.path);
@@ -6336,14 +6339,20 @@ async function decodeCity(id) {
         c.charCodeAt(0),
       );
     }
-    const expanded = await boundedBytes(
-      new Response(
-        new Blob([bytes])
-          .stream()
-          .pipeThrough(new DecompressionStream("gzip"), { signal }),
-      ),
-      64 * 1024 ** 2,
-    );
+    const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+    let expanded;
+    if (isGzip) {
+      expanded = await boundedBytes(
+        new Response(
+          new Blob([bytes])
+            .stream()
+            .pipeThrough(new DecompressionStream("gzip"), { signal }),
+        ),
+        64 * 1024 ** 2,
+      );
+    } else {
+      expanded = bytes;
+    }
     signal.throwIfAborted();
     const text = new TextDecoder("utf-8", { fatal: true }).decode(expanded);
     const source = JSON.parse(text);
@@ -7345,7 +7354,12 @@ function drawFrame() {
       scale.firstElementChild.textContent = label;
     scale.lastElementChild.style.width = stats.scale.pixels + "px";
   }
-  if (!document.hidden && liveVehicles.some((v) => Date.now() - v._startedAt < 10000)) {
+  const now = Date.now();
+  const hasMovingVehicles = liveVehicles.some((v) => {
+    const isMoving = Math.abs(v._toLat - v._fromLat) > 1e-5 || Math.abs(v._toLon - v._fromLon) > 1e-5;
+    return isMoving && (now - v._startedAt < 10000);
+  });
+  if (!document.hidden && hasMovingVehicles) {
     schedule();
   }
 }
@@ -7353,7 +7367,7 @@ function schedule() {
   if (!frame) frame = requestAnimationFrame(drawFrame);
 }
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && liveVehicles.some((v) => Date.now() - v._startedAt < 10000)) {
+  if (!document.hidden) {
     schedule();
   }
 });

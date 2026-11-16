@@ -969,6 +969,7 @@ function closeStopPanel(){
   spStop=null;
   spVehicle=null;
   spTrip=null;
+  if(scEl) scEl._renderedHtml = null;
   clearRouteLine();
   updateMarkerVisibilities();
 }
@@ -979,6 +980,7 @@ function openStopPanel(s){
   spVehicle=null;
   spTrip=null;
   spStop=s;
+  if(scEl) scEl._renderedHtml = null;
   spEl.classList.add('open');
   renderStopPanel();
   var mapW=map.getSize().x;
@@ -999,6 +1001,7 @@ function openTripPanel(tid, rid, stopId){
   spStop=null;
   spVehicle=null;
   spTrip={tid:tid, rid:rid, stopId:stopId || null};
+  if(scEl) scEl._renderedHtml = null;
   spEl.classList.add('open');
   renderTripPanel();
   var mapW=map.getSize().x;
@@ -1056,16 +1059,21 @@ function renderTripPanel(){
   } else {
     html = '<div style="text-align:center;padding:20px;color:#71717a;font-size:.85rem">Caricamento orario…</div>';
   }
-  scEl.innerHTML = html;
-  scEl.querySelectorAll('.stop-row').forEach(function(el){
-    function go(){
-      var target=null;
-      for(var k=0;k<stopData.length;k++){ if(String(stopData[k].id)===String(el.dataset.stop)){ target=stopData[k]; break; } }
-      if(target) openStopPanel(target);
-    }
-    el.onclick=go;
-    el.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } };
-  });
+  if (scEl._renderedHtml !== html) {
+    var prevScroll = scEl.scrollTop;
+    scEl.innerHTML = html;
+    scEl._renderedHtml = html;
+    scEl.scrollTop = prevScroll;
+    scEl.querySelectorAll('.stop-row').forEach(function(el){
+      function go(){
+        var target=null;
+        for(var k=0;k<stopData.length;k++){ if(String(stopData[k].id)===String(el.dataset.stop)){ target=stopData[k]; break; } }
+        if(target) openStopPanel(target);
+      }
+      el.onclick=go;
+      el.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } };
+    });
+  }
 }
 function openVehiclePanel(v){
   justOpened = true;
@@ -1074,6 +1082,7 @@ function openVehiclePanel(v){
   spStop=null;
   spTrip=null;
   spVehicle=v;
+  if(scEl) scEl._renderedHtml = null;
   spEl.classList.add('open');
   renderVehiclePanel();
   var mapW=map.getSize().x;
@@ -1223,11 +1232,19 @@ function renderVehiclePanel(){if(!spVehicle||!spEl.classList.contains('open'))re
             '</div>';
         });
         
-        scEl.innerHTML = html;
+        if (scEl._renderedHtml !== html) {
+          var prevScroll = scEl.scrollTop;
+          scEl.innerHTML = html;
+          scEl._renderedHtml = html;
+          scEl.scrollTop = prevScroll;
+        }
       });
   } else {
     html = '<div style="text-align:center;padding:20px;color:#71717a;font-size:.85rem">No schedule available</div>';
-    scEl.innerHTML = html;
+    if (scEl._renderedHtml !== html) {
+      scEl.innerHTML = html;
+      scEl._renderedHtml = html;
+    }
   }
 }
 function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
@@ -1374,15 +1391,20 @@ function renderStopPanel(){if(!spStop||!spEl.classList.contains('open'))return;
   } else {
     html='<div style="text-align:center;padding:20px;color:#71717a;font-size:.85rem">Nessun passaggio programmato</div>';
   }
-  scEl.innerHTML=html;
-  scEl.querySelectorAll('.sp-l').forEach(function(el){
-    function go(){
-      if(el.dataset.trip){ openTripPanel(el.dataset.trip, el.dataset.route, s.id); }
-      else { showRouteLine(el.dataset.route, el.dataset.vid); }
-    }
-    el.onclick=go;
-    el.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } };
-  });
+  if (scEl._renderedHtml !== html) {
+    var prevScroll = scEl.scrollTop;
+    scEl.innerHTML = html;
+    scEl._renderedHtml = html;
+    scEl.scrollTop = prevScroll;
+    scEl.querySelectorAll('.sp-l').forEach(function(el){
+      function go(){
+        if(el.dataset.trip){ openTripPanel(el.dataset.trip, el.dataset.route, s.id); }
+        else { showRouteLine(el.dataset.route, el.dataset.vid); }
+      }
+      el.onclick=go;
+      el.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } };
+    });
+  }
 }
 
 function clearRouteLine(){
@@ -1447,111 +1469,109 @@ function showRouteLine(rid, vid){
   closeStopPanel();
 }
 
+var stopMarkersMap = {};
+var activeStopMarkersInLayer = new Set();
+
+function getOrCreateStopMarker(s) {
+  var key = s.id;
+  var m = stopMarkersMap[key];
+  if (!m) {
+    m = L.circleMarker([s.lat, s.lon], {
+      radius: 3.5,
+      fillColor: '#64748b',
+      color: '#ffffff',
+      weight: 1.5,
+      fillOpacity: 1,
+      opacity: 1
+    });
+    m.on('click', function(e) {
+      if(e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
+      openStopPanel(s);
+    });
+    stopMarkersMap[key] = m;
+  }
+  return m;
+}
+
 function updateMarkerVisibilities() {
   var currentZoom = map.getZoom();
-  var currentState = "closed_hidden";
+  var stopMap = {};
+  stopData.forEach(function(st) { stopMap[st.id] = st; });
+
+  var neededStops = new Map();
+
   if (spStop) {
-    currentState = "stop_" + spStop.id;
+    neededStops.set(spStop.id, { radius: 6, fillColor: '#3b82f6', color: '#ffffff', weight: 2 });
   } else if (spVehicle) {
-    currentState = "vehicle_" + spVehicle.id + "_" + (spVehicle.stopId || "");
+    var sid = spVehicle.shapeId || (routeShapes[spVehicle.rid] && routeShapes[spVehicle.rid][0]);
+    var seq = sid ? (shapeStops[sid] || []) : [];
+    var targetIdx = seq.indexOf(spVehicle.stopId);
+    seq.forEach(function(stopId, idx) {
+      if (targetIdx !== -1 && idx < targetIdx) return;
+      if (!stopMap[stopId]) return;
+      neededStops.set(stopId, { radius: 4.5, fillColor: '#000000', color: '#ffffff', weight: 1.5 });
+    });
   } else if (spTrip) {
-    currentState = "trip_" + spTrip.tid;
-  } else if (stopsVisible) {
-    if (currentZoom >= 13) {
-      currentState = "closed_visible";
-    } else {
-      currentState = "closed_hidden_zoom";
-    }
-  }
-
-  if (currentState !== lastStopsState) {
-    lastStopsState = currentState;
-    stopLayer.clearLayers();
-    
-    if (spStop) {
-      var s = spStop;
-      var m = L.circleMarker([s.lat, s.lon], {
-        radius: 6,
-        fillColor: '#3b82f6',
+    var tdet = tripDetailCache[spTrip.tid];
+    var tsid = (tdet && tdet.shapeId) || (routeShapes[spTrip.rid] && routeShapes[spTrip.rid][0]);
+    var tseq = tsid ? (shapeStops[tsid] || []) : [];
+    tseq.forEach(function(stopId) {
+      if (!stopMap[stopId]) return;
+      var isHere = spTrip.stopId && String(spTrip.stopId) === String(stopId);
+      neededStops.set(stopId, {
+        radius: isHere ? 6 : 4.5,
+        fillColor: isHere ? '#3b82f6' : '#000000',
         color: '#ffffff',
-        weight: 2,
-        fillOpacity: 1,
-        opacity: 1
+        weight: isHere ? 2 : 1.5
       });
-      m.on('click', function(e) { if(e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent); openStopPanel(s); });
-      stopLayer.addLayer(m);
-    } else if (spVehicle) {
-      var sid = spVehicle.shapeId || (routeShapes[spVehicle.rid] && routeShapes[spVehicle.rid][0]);
-      var seq = sid ? (shapeStops[sid] || []) : [];
-      var stopMap = {};
-      stopData.forEach(function(st) { stopMap[st.id] = st; });
-      
-      var targetIdx = seq.indexOf(spVehicle.stopId);
-
-      
-      seq.forEach(function(stopId, idx) {
-        if (targetIdx !== -1 && idx < targetIdx) return;
-        var s = stopMap[stopId];
-        if (!s) return;
-        var m = L.circleMarker([s.lat, s.lon], {
-          radius: 4.5,
-          fillColor: '#000000',
-          color: '#ffffff',
-          weight: 1.5,
-          fillOpacity: 1,
-          opacity: 1
-        });
-        m.on('click', function(e) { if(e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent); openStopPanel(s); });
-        stopLayer.addLayer(m);
-      });
-    } else if (spTrip) {
-      // Scheduled trip detail: show every stop of the trip shape.
-      var tdet = tripDetailCache[spTrip.tid];
-      var tsid = (tdet && tdet.shapeId) || (routeShapes[spTrip.rid] && routeShapes[spTrip.rid][0]);
-      var tseq = tsid ? (shapeStops[tsid] || []) : [];
-      var tstopMap = {};
-      stopData.forEach(function(st) { tstopMap[st.id] = st; });
-      tseq.forEach(function(stopId) {
-        var ts = tstopMap[stopId];
-        if (!ts) return;
-        var isHere = spTrip.stopId && String(spTrip.stopId) === String(stopId);
-        var tm = L.circleMarker([ts.lat, ts.lon], {
-          radius: isHere ? 6 : 4.5,
-          fillColor: isHere ? '#3b82f6' : '#000000',
-          color: '#ffffff',
-          weight: isHere ? 2 : 1.5,
-          fillOpacity: 1,
-          opacity: 1
-        });
-        tm.on('click', function(e) { if(e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent); openStopPanel(ts); });
-        stopLayer.addLayer(tm);
-      });
-    } else {
-      if (stopsVisible && currentZoom >= 13) {
-        stopData.forEach(function(s) {
-          var m = L.circleMarker([s.lat, s.lon], {
-            radius: 3.5,
-            fillColor: '#64748b',
-            color: '#ffffff',
-            weight: 1.5,
-            fillOpacity: 1,
-            opacity: 1
-          });
-          m.on('click', function(e) { if(e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent); openStopPanel(s); });
-          stopLayer.addLayer(m);
-        });
+    });
+  } else if (stopsVisible && currentZoom >= 13) {
+    var bounds = map.getBounds().pad(0.1);
+    var south = bounds.getSouth(), north = bounds.getNorth(), west = bounds.getWest(), east = bounds.getEast();
+    for (var si = 0; si < stopData.length; si++) {
+      var s = stopData[si];
+      if (s.lat >= south && s.lat <= north && s.lon >= west && s.lon <= east) {
+        neededStops.set(s.id, { radius: 3.5, fillColor: '#64748b', color: '#ffffff', weight: 1.5 });
       }
     }
-    
-    stopLayer.bringToFront();
   }
+
+  activeStopMarkersInLayer.forEach(function(id) {
+    if (!neededStops.has(id)) {
+      var m = stopMarkersMap[id];
+      if (m && stopLayer.hasLayer(m)) {
+        stopLayer.removeLayer(m);
+      }
+      activeStopMarkersInLayer.delete(id);
+    }
+  });
+
+  neededStops.forEach(function(style, id) {
+    var s = stopMap[id];
+    if (!s) return;
+    var m = getOrCreateStopMarker(s);
+    m.setStyle({
+      radius: style.radius,
+      fillColor: style.fillColor,
+      color: style.color,
+      weight: style.weight,
+      fillOpacity: 1,
+      opacity: 1
+    });
+    if (!activeStopMarkersInLayer.has(id)) {
+      stopLayer.addLayer(m);
+      activeStopMarkersInLayer.add(id);
+    }
+  });
+
+  stopLayer.bringToFront();
 
   // Update vehicle visibility
   Object.keys(markers).forEach(function(id) {
     var m = markers[id];
     var v = lastVehicles.find(function(veh) { return String(veh.id) === String(id); });
     if (!v) {
-      map.removeLayer(m);
+      if (map.hasLayer(m)) map.removeLayer(m);
       return;
     }
     
@@ -1579,10 +1599,10 @@ function updateMarkerVisibilities() {
   });
 }
 
-// Close sidebar on map click or Escape
-map.on('click',closeStopPanel);
-map.on('zoomend',updateMarkerVisibilities);
-document.addEventListener('keydown',function(e){if(e.key==='Escape')closeStopPanel();});
+// Close sidebar on map click or Escape, track viewport moves
+map.on('click', closeStopPanel);
+map.on('zoomend moveend', updateMarkerVisibilities);
+document.addEventListener('keydown', function(e) { if(e.key === 'Escape') closeStopPanel(); });
 
 function getDelayColor(delay) {
   if (delay == null || isNaN(delay)) return '#9ca3af'; // Gray = unknown
@@ -1591,19 +1611,48 @@ function getDelayColor(delay) {
   return '#ef4444'; // Red
 }
 
-
+var lastClosestIdx = 0;
 function updateLineSplit(lat, lon, rid) {
-  if (!activeShapePoints) return;
+  if (!activeShapePoints || activeShapePoints.length === 0) return;
   var ll = activeShapePoints;
   var closestIdx = 0;
   var minDist = Infinity;
-  for(var i=0; i<ll.length; i++){
-    var d = (lat - ll[i][0])*(lat - ll[i][0]) + (lon - ll[i][1])*(lon - ll[i][1]);
-    if(d < minDist){
+
+  // Localized window search around lastClosestIdx
+  var start = Math.max(0, lastClosestIdx - 3);
+  var end = Math.min(ll.length - 1, lastClosestIdx + 25);
+  for (var i = start; i <= end; i++) {
+    var d = (lat - ll[i][0]) * (lat - ll[i][0]) + (lon - ll[i][1]) * (lon - ll[i][1]);
+    if (d < minDist) {
       minDist = d;
       closestIdx = i;
     }
   }
+
+  // Fallback to coarse-to-fine search if minimum was at boundary
+  if (closestIdx === start || closestIdx === end) {
+    var stride = Math.max(1, Math.floor(ll.length / 50));
+    var coarseMin = Infinity;
+    var coarseIdx = 0;
+    for (var ci = 0; ci < ll.length; ci += stride) {
+      var cd = (lat - ll[ci][0]) * (lat - ll[ci][0]) + (lon - ll[ci][1]) * (lon - ll[ci][1]);
+      if (cd < coarseMin) {
+        coarseMin = cd;
+        coarseIdx = ci;
+      }
+    }
+    var fineStart = Math.max(0, coarseIdx - stride);
+    var fineEnd = Math.min(ll.length - 1, coarseIdx + stride);
+    for (var fi = fineStart; fi <= fineEnd; fi++) {
+      var fd = (lat - ll[fi][0]) * (lat - ll[fi][0]) + (lon - ll[fi][1]) * (lon - ll[fi][1]);
+      if (fd < minDist) {
+        minDist = fd;
+        closestIdx = fi;
+      }
+    }
+  }
+
+  lastClosestIdx = closestIdx;
   
   var traveled = ll.slice(0, closestIdx + 1);
   traveled.push([lat, lon]);
@@ -1638,8 +1687,6 @@ function updateLineSplit(lat, lon, rid) {
   }
 }
 
-
-
 // Bus marker
 function makeIcon(rid,delay){
   var st=getStyle(rid),dc=getDelayColor(delay);
@@ -1665,11 +1712,19 @@ function closestPointIndex(lat, lon, pts) {
   return closest;
 }
 
+var shapePending = {};
 function fetchShapeForMarker(v) {
-  if (!v.shapeId) return;
-  fetch('/api/shapes?id=' + encodeURIComponent(v.shapeId) + '&encoded=1').then(function(r){return r.text();}).then(function(raw){
-    shapeCache[v.shapeId] = decodeShapePolyline(raw);
-  }).catch(function(){});
+  if (!v.shapeId || shapeCache[v.shapeId] || shapePending[v.shapeId]) return;
+  shapePending[v.shapeId] = true;
+  fetch('/api/shapes?id=' + encodeURIComponent(v.shapeId) + '&encoded=1')
+    .then(function(r){ return r.text(); })
+    .then(function(raw){
+      delete shapePending[v.shapeId];
+      if (raw) shapeCache[v.shapeId] = decodeShapePolyline(raw);
+    })
+    .catch(function(){
+      delete shapePending[v.shapeId];
+    });
 }
 
 function renderFeedStatus(status) {
@@ -1679,6 +1734,82 @@ function renderFeedStatus(status) {
   el.querySelector('span').textContent = stale ? 'dati in cache' : 'live';
   el.title = stale ? 'Il feed AMTAB non risponde: vengono mostrati gli ultimi dati ricevuti.' : 'Dati in tempo reale';
   el.style.opacity = stale ? '.65' : '1';
+}
+
+var activeVehicleAnimations = new Map();
+var masterVehicleAnimFrame = null;
+
+function masterVehicleAnimationLoop(now) {
+  masterVehicleAnimFrame = null;
+  var anyRunning = false;
+
+  activeVehicleAnimations.forEach(function(anim, id) {
+    if (anim.completed) return;
+
+    var elapsed = now - anim.startTime;
+    var t = Math.min(1, Math.max(0, elapsed / anim.duration));
+
+    var curLat, curLng;
+    if (anim.waypoints && anim.waypoints.length > 1) {
+      var totalSegments = anim.waypoints.length - 1;
+      var scaledT = t * totalSegments;
+      var segIdx = Math.min(Math.floor(scaledT), totalSegments - 1);
+      var segT = scaledT - segIdx;
+      var p1 = anim.waypoints[segIdx];
+      var p2 = anim.waypoints[segIdx + 1];
+      curLat = p1[0] + segT * (p2[0] - p1[0]);
+      curLng = p1[1] + segT * (p2[1] - p1[1]);
+    } else {
+      curLat = anim.from[0] + t * (anim.to[0] - anim.from[0]);
+      curLng = anim.from[1] + t * (anim.to[1] - anim.from[1]);
+    }
+
+    anim.marker.setLatLng([curLat, curLng]);
+
+    if (spVehicle && String(id) === String(spVehicle.id) && activeShapePoints) {
+      if (now - lastSplitUpdate >= 120 || t >= 1) {
+        lastSplitUpdate = now;
+        updateLineSplit(curLat, curLng, anim.rid);
+      }
+    }
+
+    if (t >= 1) {
+      anim.completed = true;
+    } else {
+      anyRunning = true;
+    }
+  });
+
+  activeVehicleAnimations.forEach(function(anim, id) {
+    if (anim.completed) activeVehicleAnimations.delete(id);
+  });
+
+  if (anyRunning && activeVehicleAnimations.size > 0) {
+    masterVehicleAnimFrame = requestAnimationFrame(masterVehicleAnimationLoop);
+  }
+}
+
+function animateVehicleTo(marker, v, fromLatLng, toLatLng, waypoints, duration) {
+  var id = String(v.id);
+  var pts = null;
+  if (waypoints && waypoints.length > 1) {
+    pts = [[fromLatLng.lat, fromLatLng.lng]].concat(waypoints);
+  }
+
+  activeVehicleAnimations.set(id, {
+    marker: marker,
+    rid: v.rid,
+    from: [fromLatLng.lat, fromLatLng.lng],
+    to: [toLatLng.lat, toLatLng.lng],
+    waypoints: pts,
+    startTime: performance.now(),
+    duration: duration || 10000,
+    completed: false
+  });
+
+  if (!masterVehicleAnimFrame) {
+    masterVehicleAnimFrame = requestAnimationFrame(masterVehicleAnimationLoop);
+  }
 }
 
 async function fetchData(){
@@ -1712,17 +1843,24 @@ async function fetchData(){
     var ids={};
     vehicles.forEach(function(v){
       ids[v.id]=true;
+      var iconKey = v.rid + '_' + (v.delay != null ? v.delay : 'x');
       
       if(markers[v.id]){
-        markers[v.id].setIcon(makeIcon(v.rid,v.delay));
-        markers[v.id]._targetLatLng = {lat: v.lat, lng: v.lon};
+        if (markers[v.id]._iconKey !== iconKey) {
+          markers[v.id].setIcon(makeIcon(v.rid, v.delay));
+          markers[v.id]._iconKey = iconKey;
+        }
+        var oldPos = markers[v.id].getLatLng();
+        var targetLatLng = {lat: v.lat, lng: v.lon};
+        markers[v.id]._targetLatLng = targetLatLng;
+
+        var waypoints = null;
         if (v.shapeId && shapeCache[v.shapeId] && shapeCache[v.shapeId].length > 1) {
           var shapePts = shapeCache[v.shapeId];
-          var oldPos = markers[v.id].getLatLng();
           var oldIdx = closestPointIndex(oldPos.lat, oldPos.lng, shapePts);
           var newIdx = closestPointIndex(v.lat, v.lon, shapePts);
           if (oldIdx !== -1 && newIdx !== -1 && newIdx > oldIdx) {
-            var waypoints = [];
+            waypoints = [];
             var totalSteps = newIdx - oldIdx;
             var numStops = Math.min(5, totalSteps);
             var stepSize = totalSteps / (numStops + 1);
@@ -1731,44 +1869,28 @@ async function fetchData(){
               waypoints.push([shapePts[idx].lat, shapePts[idx].lon]);
             }
             waypoints.push([shapePts[newIdx].lat, shapePts[newIdx].lon]);
-            var segDuration = 10000 / waypoints.length;
-            markers[v.id].moveTo(waypoints[0], segDuration);
-            for (var w = 1; w < waypoints.length; w++) {
-              markers[v.id].addLatLng(waypoints[w], segDuration);
-            }
           } else if (newIdx !== -1) {
-            markers[v.id].moveTo([shapePts[newIdx].lat, shapePts[newIdx].lon], 10000);
-          } else {
-            markers[v.id].moveTo([v.lat, v.lon], 10000);
+            waypoints = [[shapePts[newIdx].lat, shapePts[newIdx].lon]];
           }
-        } else {
-          markers[v.id].moveTo([v.lat, v.lon], 10000);
         }
+
+        animateVehicleTo(markers[v.id], v, oldPos, targetLatLng, waypoints, 10000);
+
         if (!v.shapeId || !shapeCache[v.shapeId]) {
           fetchShapeForMarker(v);
         }
       } else {
-        markers[v.id]=L.Marker.movingMarker([[v.lat, v.lon]], 10000, {icon:makeIcon(v.rid,v.delay), autostart: false});
-        markers[v.id]._targetLatLng = {lat: v.lat, lng: v.lon};
-        markers[v.id].on('click', function(e){
+        var m = L.marker([v.lat, v.lon], { icon: makeIcon(v.rid, v.delay) });
+        m._iconKey = iconKey;
+        m._targetLatLng = {lat: v.lat, lng: v.lon};
+        m.on('click', function(e){
           if(e.originalEvent) L.DomEvent.stopPropagation(e.originalEvent);
           var freshV = lastVehicles.find(function(veh){return String(veh.id) === String(v.id);}) || v;
           openVehiclePanel(freshV);
         });
-        markers[v.id].on('move', function(e){
-          if (spVehicle && String(v.id) === String(spVehicle.id) && activeShapePoints) {
-            var now = Date.now();
-            var target = this._targetLatLng;
-            var isFinal = target && Math.abs(e.latlng.lat - target.lat) < 0.00001 && Math.abs(e.latlng.lng - target.lng) < 0.00001;
-            if (!isFinal && now - lastSplitUpdate < 150) return;
-            lastSplitUpdate = now;
-            updateLineSplit(e.latlng.lat, e.latlng.lng, v.rid);
-          }
-        });
+        markers[v.id] = m;
         if (v.shapeId && !shapeCache[v.shapeId]) {
-          fetch('/api/shapes?id=' + encodeURIComponent(v.shapeId) + '&encoded=1').then(function(r){return r.text();}).then(function(raw){
-            shapeCache[v.shapeId] = decodeShapePolyline(raw);
-          }).catch(function(){});
+          fetchShapeForMarker(v);
         }
       }
     });
@@ -1776,6 +1898,7 @@ async function fetchData(){
     Object.keys(markers).forEach(function(id){
       if(!ids[id]){
         if (map.hasLayer(markers[id])) map.removeLayer(markers[id]);
+        activeVehicleAnimations.delete(String(id));
         delete markers[id];
       }
     });

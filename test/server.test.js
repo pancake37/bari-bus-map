@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 const TEST_PORT = 34567;
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
@@ -208,6 +210,52 @@ describe('server endpoints and security', () => {
             const data = res.json();
             assert.ok(Array.isArray(data));
         });
+
+        it('serves static GTFS API endpoints with pre-compressed gzip buffer and ETag', async () => {
+            const endpoints = ['/api/routes', '/api/stops', '/api/shape-stops', '/api/stop-info', '/api/shapes'];
+            for (const ep of endpoints) {
+                // With gzip accept header
+                const resGzip = await fetch(ep, { headers: { 'accept-encoding': 'gzip' } });
+                assert.equal(resGzip.status, 200, `${ep} should return 200`);
+                assert.equal(resGzip.headers['content-encoding'], 'gzip', `${ep} should have content-encoding: gzip`);
+                assert.ok(resGzip.headers['etag'], `${ep} should include ETag`);
+
+                // 304 conditional request
+                const etag = resGzip.headers['etag'];
+                const res304 = await fetch(ep, { headers: { 'if-none-match': etag } });
+                assert.equal(res304.status, 304, `${ep} with If-None-Match should return 304`);
+            }
+        });
+
+        it('serves static .gz files with Content-Encoding gzip when accepted', async () => {
+            const gzPath = '/mobilita/cities/bari-5365bda2a696bd4a08e39828f06e6d43dbb8f807814337d1ec8aa1687e1fe66a.json.gz';
+            const res = await fetch(gzPath, { headers: { 'accept-encoding': 'gzip' } });
+            assert.equal(res.status, 200);
+            assert.equal(res.headers['content-encoding'], 'gzip');
+            assert.ok(res.headers['content-type'].includes('application/json') || res.headers['content-type'].includes('application/gzip'));
+            assert.ok(res.headers['etag']);
+
+            // Test 304 on static gz
+            const res304 = await fetch(gzPath, { headers: { 'if-none-match': res.headers['etag'] } });
+            assert.equal(res304.status, 304);
+        });
+
+        it('serves static .json.gz decompressed with application/json when gzip is not accepted', async () => {
+            const gzPath = '/mobilita/cities/bari-5365bda2a696bd4a08e39828f06e6d43dbb8f807814337d1ec8aa1687e1fe66a.json.gz';
+            const res = await fetch(gzPath, { headers: { 'accept-encoding': 'identity' } });
+            assert.equal(res.status, 200);
+            assert.equal(res.headers['content-encoding'], undefined);
+            assert.ok(res.headers['content-type'].includes('application/json'));
+            const parsed = res.json();
+            assert.ok(typeof parsed === 'object' && parsed !== null);
+            assert.equal(parsed.id, 'bari');
+            assert.ok(Array.isArray(parsed.stops));
+            assert.ok(parsed.stops.length > 0);
+
+            // Test 304 on uncompressed asset
+            const res304 = await fetch(gzPath, { headers: { 'accept-encoding': 'identity', 'if-none-match': res.headers['etag'] } });
+            assert.equal(res304.status, 304);
+        });
     });
 
     describe('security and access control', () => {
@@ -256,5 +304,113 @@ describe('server endpoints and security', () => {
             const res = await fetch('/assets/missing-image.png');
             assert.equal(res.status, 404);
         });
+    });
+});
+
+describe('cold-start and GTFS cache extraction lifecycle', () => {
+    let coldServer;
+    const COLD_PORT = 34568;
+    const coldUrl = `http://127.0.0.1:${COLD_PORT}`;
+    const tmpCacheFile = path.join(os.tmpdir(), `gtfs-cold-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+
+    function coldFetch(urlPath, options = {}) {
+        return new Promise((resolve, reject) => {
+            const req = http.request(coldUrl + urlPath, {
+                method: options.method || 'GET',
+                headers: options.headers || {}
+            }, res => {
+                const chunks = [];
+                res.on('data', chunk => chunks.push(chunk));
+                res.on('end', () => {
+                    const body = Buffer.concat(chunks);
+                    resolve({
+                        status: res.statusCode,
+                        headers: res.headers,
+                        body,
+                        text: () => body.toString('utf8'),
+                        json: () => JSON.parse(body.toString('utf8'))
+                    });
+                });
+            });
+            req.on('error', reject);
+            req.end();
+        });
+    }
+
+    before(async () => {
+        if (fs.existsSync(tmpCacheFile)) fs.unlinkSync(tmpCacheFile);
+
+        coldServer = spawn(process.execPath, ['server.js'], {
+            cwd: path.resolve(__dirname, '..'),
+            env: Object.assign({}, process.env, {
+                PORT: String(COLD_PORT),
+                GTFS_CACHE_FILE: tmpCacheFile
+            }),
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        const start = Date.now();
+        await new Promise((resolve, reject) => {
+            function check() {
+                coldFetch('/api/status')
+                    .then(res => {
+                        if (res.status === 200) resolve();
+                        else retry();
+                    })
+                    .catch(retry);
+            }
+            function retry() {
+                if (Date.now() - start > 20000) {
+                    return reject(new Error('Cold-start server did not become ready within timeout'));
+                }
+                setTimeout(check, 300);
+            }
+            check();
+        });
+    });
+
+    after(() => {
+        if (coldServer) {
+            coldServer.kill('SIGTERM');
+        }
+        try {
+            if (fs.existsSync(tmpCacheFile)) fs.unlinkSync(tmpCacheFile);
+        } catch (_) {}
+    });
+
+    it('populates static API cache on cold extraction without prior cache file', async () => {
+        const stopsRes = await coldFetch('/api/stops');
+        assert.equal(stopsRes.status, 200);
+        const stops = stopsRes.json();
+        assert.ok(Array.isArray(stops));
+        assert.equal(stops.length, 1119, 'Cold-start /api/stops should return exactly 1,119 stops');
+
+        const shapesRes = await coldFetch('/api/shapes');
+        assert.equal(shapesRes.status, 200);
+        const shapes = shapesRes.json();
+        assert.ok(typeof shapes === 'object' && shapes !== null);
+        const shapeCount = Object.keys(shapes).length;
+        assert.ok(shapeCount >= 81, `Cold-start /api/shapes should return at least 81 shapes (got ${shapeCount})`);
+        assert.equal(shapeCount, 203, 'Cold-start /api/shapes should return 203 shapes matching GTFS feed');
+
+        const shapeStopsRes = await coldFetch('/api/shape-stops');
+        assert.equal(shapeStopsRes.status, 200);
+        const shapeStops = shapeStopsRes.json();
+        assert.ok(typeof shapeStops === 'object' && shapeStops !== null);
+        assert.ok(Object.keys(shapeStops).length > 0, 'Cold-start /api/shape-stops must not be empty');
+
+        const routesRes = await coldFetch('/api/routes');
+        assert.equal(routesRes.status, 200);
+        const routes = routesRes.json();
+        assert.ok(typeof routes === 'object' && routes !== null);
+        assert.equal(Object.keys(routes).length, 82, 'Cold-start /api/routes should return 82 routes');
+
+        const stopsGzip = await coldFetch('/api/stops', { headers: { 'accept-encoding': 'gzip' } });
+        assert.equal(stopsGzip.status, 200);
+        assert.equal(stopsGzip.headers['content-encoding'], 'gzip');
+        assert.ok(stopsGzip.headers['etag']);
+
+        const stops304 = await coldFetch('/api/stops', { headers: { 'if-none-match': stopsGzip.headers['etag'] } });
+        assert.equal(stops304.status, 304);
     });
 });

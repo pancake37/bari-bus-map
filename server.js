@@ -4,13 +4,14 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const zlib = require('zlib');
+const crypto = require('crypto');
 const { parseCSVLine } = require('./lib/csv');
 const { extractZip } = require('./lib/zip');
 const { dateToGtfsStr, getActiveServiceIds, hasServiceCalendar, rebuildRouteShapes, rebuildStopInfo } = require('./lib/calendar');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const GTFS_ZIP = path.join(__dirname, 'google_transit.zip');
-const CACHE = path.join(__dirname, '.gtfs-cache.json');
+const CACHE = process.env.GTFS_CACHE_FILE || path.join(__dirname, '.gtfs-cache.json');
 const DATA_DIR = path.join(__dirname, 'data');
 const HIST_FILE = path.join(DATA_DIR, 'hist-speed.json');
 
@@ -41,7 +42,8 @@ const MIME = {
     '.svg':  'image/svg+xml',
     '.webp': 'image/webp',
     '.ico':  'image/x-icon',
-    '.gif':  'image/gif'
+    '.gif':  'image/gif',
+    '.gz':   'application/gzip'
 };
 
 const STATIC_ASSET_EXTS = new Set(['.html', '.js', '.css', '.png', '.jpg', '.jpeg', '.svg', '.webp', '.ico', '.gif']);
@@ -57,8 +59,69 @@ function getCachedShapePolyline(id, pts) {
     return cached;
 }
 
+const staticApiCache = new Map();
+
+function buildStaticResponseEntry(payload, contentType = 'application/json; charset=utf-8') {
+    const raw = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    const rawBuf = Buffer.from(raw, 'utf8');
+    const gzipBuf = zlib.gzipSync(rawBuf, { level: 9 });
+    const etag = '"' + crypto.createHash('md5').update(rawBuf).digest('hex') + '"';
+    return {
+        raw,
+        rawBuf,
+        gzipBuf,
+        etag,
+        contentType,
+        rawLen: rawBuf.length,
+        gzipLen: gzipBuf.length
+    };
+}
+
+function rebuildStaticApiCache() {
+    staticApiCache.clear();
+    staticApiCache.set('/api/routes', buildStaticResponseEntry(gtfsData.routes));
+    staticApiCache.set('/api/stops', buildStaticResponseEntry(gtfsData.stops));
+    staticApiCache.set('/api/shape-stops', buildStaticResponseEntry(gtfsData.stopSequence));
+    staticApiCache.set('/api/stop-info', buildStaticResponseEntry(gtfsData.stopInfo));
+    staticApiCache.set('/api/route-shapes', buildStaticResponseEntry(gtfsData.routeShapes));
+    staticApiCache.set('/api/shapes', buildStaticResponseEntry(gtfsData.shapes));
+}
+
+function sendCachedResponse(req, res, entry, maxAge = 3600) {
+    const ifNoneMatch = req.headers && req.headers['if-none-match'];
+    if (ifNoneMatch && (ifNoneMatch === entry.etag || ifNoneMatch === entry.etag.slice(1, -1) || ifNoneMatch === '*')) {
+        res.writeHead(304, {
+            'ETag': entry.etag,
+            'Cache-Control': `public, max-age=${maxAge}`,
+            'Vary': 'Accept-Encoding'
+        });
+        return res.end();
+    }
+    const accept = (req.headers && req.headers['accept-encoding']) || '';
+    if (accept.includes('gzip')) {
+        res.writeHead(200, {
+            'Content-Type': entry.contentType,
+            'Content-Encoding': 'gzip',
+            'Content-Length': entry.gzipLen,
+            'ETag': entry.etag,
+            'Cache-Control': `public, max-age=${maxAge}`,
+            'Vary': 'Accept-Encoding'
+        });
+        return res.end(entry.gzipBuf);
+    }
+    res.writeHead(200, {
+        'Content-Type': entry.contentType,
+        'Content-Length': entry.rawLen,
+        'ETag': entry.etag,
+        'Cache-Control': `public, max-age=${maxAge}`,
+        'Vary': 'Accept-Encoding'
+    });
+    return res.end(entry.rawBuf);
+}
+
 function emptyGtfsData() {
     shapePolylineCache.clear();
+    staticApiCache.clear();
     return {
         cacheVersion: CACHE_VERSION,
         routes: {},
@@ -318,6 +381,7 @@ function extractAll() {
         buildStopRoutePositions();
         buildStopSequences();
         buildTripTimetable();
+        rebuildStaticApiCache();
 
         console.log('  GTFS extracted: ' + Object.keys(gtfsData.routes).length + ' routes, ' +
             gtfsData.stops.length + ' stops, ' + Object.keys(gtfsData.shapes).length + ' shapes, ' +
@@ -348,6 +412,7 @@ function recomputeActiveServices(force) {
     const tripShapes = gtfsData.tripShapes || {};
     gtfsData.routeShapes = rebuildRouteShapes(tripShapes, tripRouteIds, sidMap, activeSids);
     gtfsData.stopInfo = rebuildStopInfo(gtfsData.stopTimes, sidMap, activeSids);
+    rebuildStaticApiCache();
     lastServiceDate = dateStr;
     const nActive = activeSids ? activeSids.size : null;
     const label = nActive !== null
@@ -1015,37 +1080,52 @@ http.createServer((req, res) => {
         return sendJson(req, res, 200, dynamicHead, etasCache);
     }
     if (url === '/api/routes') {
-        return sendJson(req, res, 200, staticHead, gtfsData.routes);
+        const entry = staticApiCache.get('/api/routes') || buildStaticResponseEntry(gtfsData.routes);
+        return sendCachedResponse(req, res, entry);
     }
     if (url === '/api/stops') {
-        return sendJson(req, res, 200, staticHead, gtfsData.stops);
+        const entry = staticApiCache.get('/api/stops') || buildStaticResponseEntry(gtfsData.stops);
+        return sendCachedResponse(req, res, entry);
     }
     if (url.startsWith('/api/shapes')) {
         const u = new URL(url, 'http://localhost');
         const id = u.searchParams.get('id');
         const encoded = u.searchParams.get('encoded') === '1';
         if (encoded) {
-            const head = Object.assign({}, staticHead, { 'Content-Type': 'text/plain; charset=utf-8' });
-            if (id) {
-                const sh = gtfsData.shapes[id];
-                return sendJson(req, res, 200, head, sh ? getCachedShapePolyline(id, sh) : '');
+            const cacheKey = `/api/shapes?id=${id || ''}&encoded=1`;
+            let entry = staticApiCache.get(cacheKey);
+            if (!entry) {
+                const sh = id ? gtfsData.shapes[id] : null;
+                const text = sh ? getCachedShapePolyline(id, sh) : '';
+                entry = buildStaticResponseEntry(text, 'text/plain; charset=utf-8');
+                staticApiCache.set(cacheKey, entry);
             }
-            return sendJson(req, res, 200, head, '');
+            return sendCachedResponse(req, res, entry);
         }
         if (id) {
-            const sh = gtfsData.shapes[id];
-            return sendJson(req, res, 200, staticHead, sh ? JSON.stringify(sh) : '[]');
+            const cacheKey = `/api/shapes?id=${id}`;
+            let entry = staticApiCache.get(cacheKey);
+            if (!entry) {
+                const sh = gtfsData.shapes[id];
+                entry = buildStaticResponseEntry(sh ? sh : []);
+                staticApiCache.set(cacheKey, entry);
+            }
+            return sendCachedResponse(req, res, entry);
         }
-        return sendJson(req, res, 200, staticHead, gtfsData.shapes);
+        const entry = staticApiCache.get('/api/shapes') || buildStaticResponseEntry(gtfsData.shapes);
+        return sendCachedResponse(req, res, entry);
     }
     if (url === '/api/stop-info') {
-        return sendJson(req, res, 200, staticHead, gtfsData.stopInfo);
+        const entry = staticApiCache.get('/api/stop-info') || buildStaticResponseEntry(gtfsData.stopInfo);
+        return sendCachedResponse(req, res, entry);
     }
     if (url === '/api/route-shapes') {
-        return sendJson(req, res, 200, staticHead, gtfsData.routeShapes);
+        const entry = staticApiCache.get('/api/route-shapes') || buildStaticResponseEntry(gtfsData.routeShapes);
+        return sendCachedResponse(req, res, entry);
     }
     if (url === '/api/shape-stops') {
-        return sendJson(req, res, 200, staticHead, gtfsData.stopSequence);
+        const entry = staticApiCache.get('/api/shape-stops') || buildStaticResponseEntry(gtfsData.stopSequence);
+        return sendCachedResponse(req, res, entry);
     }
     if (url === '/api/otp') {
         return sendJson(req, res, 200, dynamicHead, otpCache);
@@ -1099,29 +1179,82 @@ http.createServer((req, res) => {
 
     fs.readFile(file, (err, data) => {
         if (err) { res.writeHead(404); res.end('Not found'); return; }
-        const ext = path.extname(file);
-        const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+        const ext = path.extname(file).toLowerCase();
+        const isJsonGz = file.endsWith('.json.gz');
+        let contentType = MIME[ext] || 'application/octet-stream';
+        if (isJsonGz) {
+            contentType = 'application/json';
+        } else if (ext === '.gz') {
+            contentType = 'application/gzip';
+        }
+
+        const accept = (req.headers && req.headers['accept-encoding']) || '';
+        let payload = data;
+        let isGzipEncoded = false;
+
+        if (ext === '.gz') {
+            if (accept.includes('gzip')) {
+                isGzipEncoded = true;
+            } else if (isJsonGz) {
+                try {
+                    payload = zlib.gunzipSync(data);
+                } catch (zerr) {
+                    contentType = 'application/gzip';
+                }
+            } else {
+                contentType = 'application/gzip';
+            }
+        }
+
+        const headers = { 'Content-Type': contentType };
         if (ext === '.html' || ext === '.js' || ext === '.css') {
             headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0';
         } else if (ext === '.gz' || ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.svg' || ext === '.webp') {
             headers['Cache-Control'] = 'public, max-age=31536000, immutable';
         }
-        const accept = req.headers['accept-encoding'] || '';
-        if (accept.includes('gzip') && ext !== '.gz' && data.length > 1024) {
-            zlib.gzip(data, (zerr, buf) => {
+        if (ext === '.gz') {
+            headers['Vary'] = 'Accept-Encoding';
+        }
+
+        const fileEtag = '"' + crypto.createHash('md5').update(data).digest('hex') + '"';
+        const payloadEtag = payload === data ? fileEtag : ('"' + crypto.createHash('md5').update(payload).digest('hex') + '"');
+        headers['ETag'] = fileEtag;
+
+        const ifNoneMatch = req.headers && req.headers['if-none-match'];
+        if (ifNoneMatch && (ifNoneMatch === fileEtag || ifNoneMatch === fileEtag.slice(1, -1) ||
+                            ifNoneMatch === payloadEtag || ifNoneMatch === payloadEtag.slice(1, -1) ||
+                            ifNoneMatch === '*')) {
+            res.writeHead(304, headers);
+            return res.end();
+        }
+
+        if (ext === '.gz') {
+            if (isGzipEncoded) {
+                headers['Content-Encoding'] = 'gzip';
+            }
+            headers['Content-Length'] = payload.length;
+            res.writeHead(200, headers);
+            return res.end(payload);
+        }
+
+        if (accept.includes('gzip') && payload.length > 1024) {
+            zlib.gzip(payload, (zerr, buf) => {
                 if (zerr) {
+                    headers['Content-Length'] = payload.length;
                     res.writeHead(200, headers);
-                    return res.end(data);
+                    return res.end(payload);
                 }
                 res.writeHead(200, Object.assign({}, headers, {
                     'Content-Encoding': 'gzip',
-                    'Content-Length': buf.length
+                    'Content-Length': buf.length,
+                    'Vary': 'Accept-Encoding'
                 }));
                 res.end(buf);
             });
         } else {
+            headers['Content-Length'] = payload.length;
             res.writeHead(200, headers);
-            res.end(data);
+            res.end(payload);
         }
     });
 }).listen(PORT, () => {
