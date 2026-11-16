@@ -160,6 +160,7 @@ let gtfsData = emptyGtfsData();
 let vehiclesCache = [], delaysCache = {}, tripUpdatesCache = {}, etasCache = {}, otpCache = {};
 let tripTimetableCache = {}; // trip_id → [{stop_id, stop_name, arrival, sequence}] sorted by sequence
 let tripHeadsignCache = {}; // trip_id → headsign string
+let shapeLastStopMap = {}; // shape_id → last stop name
 // Last-known realtime per trip, retained across polls (MyCicero keeps realtime
 // per solution even after the trip drops out of the feed).
 let tripDelayHistory = {}; // tid → {delay, stops, updatedAt}
@@ -545,6 +546,16 @@ function buildTripTimetable() {
             tripHeadsignCache[tid] = tripTimetableCache[tid][tripTimetableCache[tid].length - 1].stop_name;
         }
     });
+
+    shapeLastStopMap = {};
+    const stopSequence = gtfsData.stopSequence || {};
+    Object.keys(stopSequence).forEach(shp => {
+        const seq = stopSequence[shp];
+        if (seq && seq.length > 0) {
+            const lastId = seq[seq.length - 1];
+            shapeLastStopMap[shp] = stopNameMap[lastId] || lastId;
+        }
+    });
 }
 
 function getTripTimetable(tid) {
@@ -837,8 +848,12 @@ function pollRealtime() {
                 const rid = (veh.Trip && veh.Trip.RouteId) || '';
                 const tid = (veh.Trip && veh.Trip.TripId) || '';
                 const shapeId = gtfsData.tripShapes[tid] || (gtfsData.routeShapes[rid] && gtfsData.routeShapes[rid][0]) || '';
+                const routeShort = (gtfsData.routes[rid] && gtfsData.routes[rid].route_short_name) || rid;
+                const dest = (tid && tripHeadsignCache[tid]) || (shapeId && shapeLastStopMap[shapeId]) || (gtfsData.routes[rid] && gtfsData.routes[rid].route_long_name) || '';
                 const v = {
                     id: e.Id, rid, tid,
+                    route_short_name: routeShort,
+                    dest,
                     lat: veh.Position.Latitude, lon: veh.Position.Longitude,
                     spd: veh.Position.Speed || 0,
                     shapeId,

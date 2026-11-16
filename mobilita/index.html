@@ -149,7 +149,7 @@
       position: absolute;
       top: 16px;
       left: 16px;
-      width: 320px;
+      width: 360px;
       max-width: calc(100vw - 32px);
       z-index: 10;
       background: var(--card-bg);
@@ -174,7 +174,7 @@
       font-size: 14px;
     }
     .search-results {
-      max-height: 280px;
+      max-height: 320px;
       overflow-y: auto;
       border-top: 1px solid var(--border);
       display: none;
@@ -186,6 +186,7 @@
       align-items: center;
       justify-content: space-between;
       border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+      gap: 8px;
     }
     .search-item:hover {
       background: rgba(0, 0, 0, 0.05);
@@ -349,7 +350,7 @@
 
     <div class="search-box">
       <div class="search-input-wrap">
-        <input id="search-input" type="text" placeholder="Cerca linea o fermata…" autocomplete="off">
+        <input id="search-input" type="text" placeholder="Cerca linea, bus o fermata…" autocomplete="off">
       </div>
       <div id="search-results" class="search-results"></div>
     </div>
@@ -358,7 +359,6 @@
       <button id="ctrl-zoom-in" title="Aumenta zoom">+</button>
       <button id="ctrl-zoom-out" title="Riduci zoom">−</button>
       <button id="ctrl-center" title="Centro città">⊙</button>
-      <button id="ctrl-north" title="Orienta a nord">N</button>
     </div>
 
     <div id="bus-card" class="detail-card" style="display: none;">
@@ -417,6 +417,9 @@
       zoom: 12.8,
       minZoom: 10,
       maxZoom: 19,
+      dragRotate: false,
+      touchPitch: false,
+      pitchWithRotate: false,
       attributionControl: false
     });
 
@@ -446,8 +449,12 @@
     let routesData = {};
     let stopsData = [];
     let stopsMap = new Map(); // id -> stop name
+    let stopInfoData = {}; // stopId -> [{route_id, headsign, next}]
     let shapeStopsData = {}; // shapeId -> [stopId, ...]
     const shapeCache = new Map();
+    let currentRouteCoords = null;
+    let currentRouteColor = null;
+    let selectedStopPoint = null; // { lon, lat, name }
     let animFrame = 0;
 
     function resizeOverlay() {
@@ -487,10 +494,14 @@
         const pos = currentVehiclePosition(v, now);
         if (now - v._startedAt < 1600) hasMoving = true;
 
+        const isSelected = String(v.vid ?? v.id) === selectedVehicleId;
+        if (isSelected && currentRouteCoords) {
+          updateRouteDisplay(pos);
+        }
+
         const p = map.project([pos.lon, pos.lat]);
         if (p.x < -30 || p.y < -30 || p.x > width + 30 || p.y > height + 30) continue;
 
-        const isSelected = String(v.vid ?? v.id) === selectedVehicleId;
         const color = getRouteColor(v.rid);
         const label = String(v.route_short_name || v.rid || "");
 
@@ -558,6 +569,73 @@
         hits.push({ id: String(v.vid ?? v.id), x: p.x, y: p.y - 7, r: Math.max(14, pillW / 2 + 4) });
       }
 
+      // Draw highlighted selected stop pin on overlay canvas
+      if (selectedStopPoint) {
+        const sp = map.project([selectedStopPoint.lon, selectedStopPoint.lat]);
+        if (sp.x >= -60 && sp.y >= -60 && sp.x <= width + 60 && sp.y <= height + 60) {
+          // Radar pulse ring
+          const pulse = (Math.sin(now / 180) + 1) / 2; // 0..1
+          const haloR = 14 + pulse * 10;
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, haloR, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(37, 99, 235, ${0.35 - pulse * 0.28})`;
+          ctx.fill();
+          ctx.strokeStyle = "rgba(37, 99, 235, 0.75)";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Outer pin circle
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, 7.5, 0, Math.PI * 2);
+          ctx.fillStyle = "#2563eb";
+          ctx.fill();
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+
+          // Stop name badge above the pin
+          ctx.font = "bold 12px system-ui, -apple-system, sans-serif";
+          const labelText = selectedStopPoint.name;
+          const textW = ctx.measureText(labelText).width;
+          const badgeW = textW + 16;
+          const badgeH = 22;
+          const badgeX = sp.x - badgeW / 2;
+          const badgeY = sp.y - 30;
+
+          // Shadow
+          ctx.beginPath();
+          ctx.roundRect(badgeX, badgeY + 1, badgeW, badgeH, 6);
+          ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+          ctx.fill();
+
+          // Badge background
+          ctx.beginPath();
+          ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 6);
+          ctx.fillStyle = isDark ? "#1e293b" : "#ffffff";
+          ctx.fill();
+          ctx.strokeStyle = "#2563eb";
+          ctx.lineWidth = 1.8;
+          ctx.stroke();
+
+          // Small triangle pointer
+          ctx.beginPath();
+          ctx.moveTo(sp.x - 5, badgeY + badgeH);
+          ctx.lineTo(sp.x + 5, badgeY + badgeH);
+          ctx.lineTo(sp.x, badgeY + badgeH + 5);
+          ctx.closePath();
+          ctx.fillStyle = isDark ? "#1e293b" : "#ffffff";
+          ctx.fill();
+
+          // Label text
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = isDark ? "#ffffff" : "#0f172a";
+          ctx.fillText(labelText, sp.x, badgeY + badgeH / 2);
+
+          hasMoving = true;
+        }
+      }
+
       if (hasMoving) {
         cancelAnimationFrame(animFrame);
         animFrame = requestAnimationFrame(drawOverlay);
@@ -572,19 +650,35 @@
       startPolling();
     });
 
-    // Map Sources for Route and Stops
+    // Map Sources for Route, Stops, and Selected Stop Marker
     function initMapSources() {
-      // Route line source
-      map.addSource("route-line", {
+      // 1. Traveled path (dashed line)
+      map.addSource("route-traveled", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] }
       });
-
-      // Route casing
       map.addLayer({
-        id: "route-casing",
+        id: "route-traveled-line",
         type: "line",
-        source: "route-line",
+        source: "route-traveled",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": 4.5,
+          "line-dasharray": [2.5, 2],
+          "line-opacity": 0.8
+        }
+      });
+
+      // 2. Remaining path (solid line with casing)
+      map.addSource("route-remaining", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] }
+      });
+      map.addLayer({
+        id: "route-remaining-casing",
+        type: "line",
+        source: "route-remaining",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": "#ffffff",
@@ -592,27 +686,23 @@
           "line-opacity": 0.95
         }
       });
-
-      // Route inner line
       map.addLayer({
-        id: "route-inner",
+        id: "route-remaining-inner",
         type: "line",
-        source: "route-line",
+        source: "route-remaining",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": ["get", "color"],
           "line-width": 5,
-          "line-opacity": 0.9
+          "line-opacity": 1.0
         }
       });
 
-      // Stops source
+      // 3. Stops layer
       map.addSource("stops", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] }
       });
-
-      // Stops circle layer
       map.addLayer({
         id: "stops-circle",
         type: "circle",
@@ -626,8 +716,6 @@
           "circle-stroke-width": 2
         }
       });
-
-      // Stops text label layer
       map.addLayer({
         id: "stops-label",
         type: "symbol",
@@ -648,11 +736,57 @@
         }
       });
 
+      // 4. Selected Stop highlight marker
+      map.addSource("selected-stop", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] }
+      });
+      map.addLayer({
+        id: "selected-stop-halo",
+        type: "circle",
+        source: "selected-stop",
+        paint: {
+          "circle-radius": 16,
+          "circle-color": "rgba(37, 99, 235, 0.22)",
+          "circle-stroke-color": "#2563eb",
+          "circle-stroke-width": 2.5
+        }
+      });
+      map.addLayer({
+        id: "selected-stop-dot",
+        type: "circle",
+        source: "selected-stop",
+        paint: {
+          "circle-radius": 6.5,
+          "circle-color": "#2563eb",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2
+        }
+      });
+      map.addLayer({
+        id: "selected-stop-label",
+        type: "symbol",
+        source: "selected-stop",
+        layout: {
+          "text-field": ["get", "name"],
+          "text-size": 13,
+          "text-offset": [0, -1.8],
+          "text-anchor": "bottom"
+        },
+        paint: {
+          "text-color": "#0f172a",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 2.5
+        }
+      });
+
       // Click on stop
       map.on("click", "stops-circle", (e) => {
         if (!e.features?.length) return;
-        const prop = e.features[0].properties;
-        showStopCard(prop.id, prop.name);
+        const feat = e.features[0];
+        const prop = feat.properties;
+        const geom = feat.geometry;
+        showStopCard(prop.id, prop.name, geom.coordinates[0], geom.coordinates[1]);
       });
       map.on("mouseenter", "stops-circle", () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", "stops-circle", () => { map.getCanvas().style.cursor = ""; });
@@ -674,6 +808,50 @@
       return points;
     }
 
+    function projectPointOnSegment(p, a, b) {
+      const dx = b[0] - a[0];
+      const dy = b[1] - a[1];
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return a;
+      let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
+      t = Math.max(0, Math.min(1, t));
+      return [a[0] + t * dx, a[1] + t * dy];
+    }
+
+    function splitPolylineAtPoint(coords, pt) {
+      if (!coords || coords.length < 2) return { traveled: coords || [], remaining: [] };
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      let bestProj = coords[0];
+      for (let i = 0; i < coords.length - 1; i++) {
+        const proj = projectPointOnSegment(pt, coords[i], coords[i + 1]);
+        const d = Math.hypot(pt[0] - proj[0], pt[1] - proj[1]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+          bestProj = proj;
+        }
+      }
+      const traveled = coords.slice(0, bestIdx + 1).concat([bestProj]);
+      const remaining = [bestProj].concat(coords.slice(bestIdx + 1));
+      return { traveled, remaining };
+    }
+
+    function updateRouteDisplay(pos) {
+      if (!currentRouteCoords || currentRouteCoords.length < 2) return;
+      const split = splitPolylineAtPoint(currentRouteCoords, [pos.lon, pos.lat]);
+      map.getSource("route-traveled")?.setData({
+        type: "Feature",
+        properties: { color: currentRouteColor },
+        geometry: { type: "LineString", coordinates: split.traveled }
+      });
+      map.getSource("route-remaining")?.setData({
+        type: "Feature",
+        properties: { color: currentRouteColor },
+        geometry: { type: "LineString", coordinates: split.remaining }
+      });
+    }
+
     async function loadShape(shapeId) {
       if (!shapeId) return null;
       if (shapeCache.has(shapeId)) return shapeCache.get(shapeId);
@@ -688,14 +866,20 @@
     }
 
     function closeStopCard() {
+      selectedStopPoint = null;
       document.getElementById("stop-card").style.display = "none";
+      map.getSource("selected-stop")?.setData({ type: "FeatureCollection", features: [] });
+      drawOverlay();
     }
     document.getElementById("stop-card-close").onclick = closeStopCard;
 
     function closeVehicleCard() {
       selectedVehicleId = null;
+      currentRouteCoords = null;
+      currentRouteColor = null;
       document.getElementById("bus-card").style.display = "none";
-      map.getSource("route-line")?.setData({ type: "FeatureCollection", features: [] });
+      map.getSource("route-traveled")?.setData({ type: "FeatureCollection", features: [] });
+      map.getSource("route-remaining")?.setData({ type: "FeatureCollection", features: [] });
       drawOverlay();
     }
     document.getElementById("bus-card-close").onclick = closeVehicleCard;
@@ -732,21 +916,19 @@
         delayEl.className = "delay-pill delay-early";
       }
 
-      // Initial destination placeholder based on route data
+      // Initial destination placeholder based on route data or vehicle dest
       const rMeta = routesData[v.rid] || routesData[lineShort];
-      const defaultDest = rMeta?.route_long_name || ("Linea " + lineShort);
+      const defaultDest = v.dest || rMeta?.route_long_name || ("Linea " + lineShort);
       document.getElementById("bus-card-dest").textContent = defaultDest;
 
-      // Draw route on MapLibre GPU layer (preserving current camera zoom without zooming out)
+      // Draw route on MapLibre GPU layers (split into dashed traveled and solid remaining)
       const shapeId = v.shapeId;
       if (shapeId) {
         const coords = await loadShape(shapeId);
         if (coords && coords.length > 1) {
-          map.getSource("route-line")?.setData({
-            type: "Feature",
-            properties: { color: getRouteColor(v.rid) },
-            geometry: { type: "LineString", coordinates: coords }
-          });
+          currentRouteCoords = coords;
+          currentRouteColor = getRouteColor(v.rid);
+          updateRouteDisplay({ lon: v.lon, lat: v.lat });
         }
       }
 
@@ -780,7 +962,9 @@
           sequence: idx + 1
         }));
         if (fallbackStops.length > 0) {
-          document.getElementById("bus-card-dest").textContent = fallbackStops[fallbackStops.length - 1].stop_name;
+          if (!v.dest && fallbackStops.length > 0) {
+            document.getElementById("bus-card-dest").textContent = fallbackStops[fallbackStops.length - 1].stop_name;
+          }
           renderTimeline(fallbackStops, v.currentStopSequence);
           gotTimetable = true;
         }
@@ -842,12 +1026,33 @@
       return diff;
     }
 
-    // Show Stop Card
-    async function showStopCard(stopId, stopName) {
+    // Show Stop Card & Place Highlight Pin on Map
+    async function showStopCard(stopId, stopName, lon, lat) {
       closeVehicleCard();
+      const sId = String(stopId);
+      const finalName = stopName || stopsMap.get(sId) || ("Fermata #" + sId);
       document.getElementById("stop-card").style.display = "flex";
-      document.getElementById("stop-card-name").textContent = stopName || stopsMap.get(String(stopId)) || ("Fermata #" + stopId);
-      document.getElementById("stop-card-id").textContent = "Fermata #" + stopId;
+      document.getElementById("stop-card-name").textContent = finalName;
+      document.getElementById("stop-card-id").textContent = "Fermata #" + sId;
+
+      // Drop highlight pin on map
+      let sLon = lon, sLat = lat;
+      if (sLon == null || sLat == null) {
+        const sObj = stopsData.find(s => String(s.id ?? s.stop_id) === sId);
+        if (sObj) {
+          sLon = Number(sObj.lon ?? sObj.stop_lon);
+          sLat = Number(sObj.lat ?? sObj.stop_lat);
+        }
+      }
+      if (sLon != null && sLat != null && Number.isFinite(Number(sLon)) && Number.isFinite(Number(sLat))) {
+        selectedStopPoint = { lon: Number(sLon), lat: Number(sLat), name: finalName };
+        map.getSource("selected-stop")?.setData({
+          type: "Feature",
+          properties: { name: finalName },
+          geometry: { type: "Point", coordinates: [Number(sLon), Number(sLat)] }
+        });
+      }
+      drawOverlay();
 
       const container = document.getElementById("stop-card-arrivals");
       container.innerHTML = '<div style="color: var(--muted); font-size: 13px;">Caricamento arrivi…</div>';
@@ -1038,13 +1243,18 @@
         .then(r => r.json())
         .then(ss => { shapeStopsData = ss || {}; })
         .catch(() => {});
+
+      // Load stop directions info
+      fetch("/api/stop-info")
+        .then(r => r.json())
+        .then(si => { stopInfoData = si || {}; })
+        .catch(() => {});
     }
 
     // Controls
     document.getElementById("ctrl-zoom-in").onclick = () => map.zoomIn({ duration: 300 });
     document.getElementById("ctrl-zoom-out").onclick = () => map.zoomOut({ duration: 300 });
     document.getElementById("ctrl-center").onclick = () => map.flyTo({ center: BARI_CENTER, zoom: 12.8, duration: 600 });
-    document.getElementById("ctrl-north").onclick = () => map.resetNorth({ duration: 400 });
 
     document.getElementById("toggle-stops").onclick = () => {
       stopsVisible = !stopsVisible;
@@ -1071,7 +1281,7 @@
       });
     };
 
-    // Search functionality
+    // Search functionality with live vehicles, directions, and stop context
     const searchInput = document.getElementById("search-input");
     const searchResults = document.getElementById("search-results");
 
@@ -1080,29 +1290,65 @@
       if (!q) { searchResults.style.display = "none"; return; }
 
       const matches = [];
-      // Match lines
-      for (const [rid, r] of Object.entries(routesData)) {
-        const shortName = String(r.route_short_name || rid || "");
-        const longName = String(r.route_long_name || "");
-        if (shortName.toLowerCase().includes(q) || longName.toLowerCase().includes(q) || rid.toLowerCase().includes(q)) {
+
+      // 1. Match Active Live Buses (with direction / destination)
+      for (const v of vehicles.values()) {
+        const vLine = String(v.route_short_name || v.rid || "").toLowerCase();
+        const vDest = String(v.dest || "").toLowerCase();
+        const vId = String(v.vid ?? v.id ?? "").toLowerCase();
+
+        if (vLine === q || vLine.startsWith(q) || vDest.includes(q) || vId.includes(q)) {
+          const speedText = (v.spd && v.spd > 0) ? `${Math.round(v.spd)} km/h` : "Fermo / In sosta";
           matches.push({
-            type: "route",
-            id: rid,
-            title: "Linea " + shortName,
-            sub: longName || ("Percorso linea " + shortName)
+            type: "vehicle",
+            id: String(v.vid ?? v.id),
+            rid: v.rid,
+            line: v.route_short_name || v.rid,
+            title: `Linea ${v.route_short_name || v.rid} → ${v.dest || 'In servizio'}`,
+            sub: `Bus #${v.vid ?? v.id} · ${speedText}`,
+            lat: v.lat,
+            lon: v.lon
           });
         }
       }
-      // Match stops
+
+      // 2. Match Static Routes (if query matches a line number or name)
+      for (const [rid, r] of Object.entries(routesData)) {
+        const shortName = String(r.route_short_name || rid || "");
+        const longName = String(r.route_long_name || "");
+        if (shortName.toLowerCase() === q || shortName.toLowerCase().startsWith(q) || longName.toLowerCase().includes(q) || rid.toLowerCase() === q) {
+          // Check if this route is already represented by active vehicles
+          const hasVeh = matches.some(m => m.type === "vehicle" && String(m.line) === shortName);
+          if (!hasVeh) {
+            matches.push({
+              type: "route",
+              id: rid,
+              line: shortName,
+              title: "Linea " + shortName,
+              sub: longName || ("Percorso linea " + shortName)
+            });
+          }
+        }
+      }
+
+      // 3. Match Stops with direction context
       for (const s of stopsData) {
         const sName = String(s.name ?? s.stop_name ?? "");
         const sId = String(s.id ?? s.stop_id ?? "");
         if (sName.toLowerCase().includes(q) || sId.includes(q)) {
+          let dirContext = "";
+          const sInfo = stopInfoData[sId];
+          if (sInfo && sInfo.length) {
+            const headsigns = Array.from(new Set(sInfo.map(x => x.headsign).filter(Boolean)));
+            if (headsigns.length > 0) {
+              dirContext = " · Verso " + headsigns.slice(0, 2).join(", ");
+            }
+          }
           matches.push({
             type: "stop",
             id: sId,
             title: sName,
-            sub: "Fermata #" + sId,
+            sub: `Fermata #${sId}${dirContext}`,
             lat: s.lat ?? s.stop_lat,
             lon: s.lon ?? s.stop_lon
           });
@@ -1117,26 +1363,41 @@
       }
 
       searchResults.innerHTML = "";
-      matches.slice(0, 10).forEach(m => {
+      matches.slice(0, 12).forEach(m => {
         const el = document.createElement("div");
         el.className = "search-item";
+        let badgeHtml = "";
+        if (m.type === "vehicle" || m.type === "route") {
+          badgeHtml = `<span class="route-pill" style="background: ${getRouteColor(m.rid || m.id)}; font-size: 11px; padding: 2px 7px; flex-shrink: 0;">${m.line || m.id}</span>`;
+        } else {
+          badgeHtml = `<span style="font-size: 15px; color: #2563eb; flex-shrink: 0;">📍</span>`;
+        }
+
         el.innerHTML = `
-          <div>
-            <div style="font-weight: 600;">${m.title}</div>
-            <div style="font-size: 12px; color: var(--muted);">${m.sub || ''}</div>
+          <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+            ${badgeHtml}
+            <div style="min-width: 0; display: flex; flex-direction: column;">
+              <span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${m.title}</span>
+              <span style="font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${m.sub || ''}</span>
+            </div>
           </div>
         `;
+
         el.onclick = async () => {
           searchResults.style.display = "none";
           searchInput.value = "";
-          if (m.type === "stop") {
-            map.flyTo({ center: [Number(m.lon), Number(m.lat)], zoom: 16, duration: 600 });
-            showStopCard(m.id, m.title);
+          if (m.type === "vehicle") {
+            selectVehicle(m.id);
+            map.flyTo({ center: [Number(m.lon), Number(m.lat)], zoom: 15.5, duration: 600 });
+          } else if (m.type === "stop") {
+            map.flyTo({ center: [Number(m.lon), Number(m.lat)], zoom: 16.5, duration: 600 });
+            showStopCard(m.id, m.title, m.lon, m.lat);
           } else {
             // Find live vehicle of this route or show route
             const v = Array.from(vehicles.values()).find(veh => String(veh.rid) === String(m.id) || String(veh.route_short_name) === String(m.id));
             if (v) {
               selectVehicle(String(v.vid ?? v.id));
+              map.flyTo({ center: [Number(v.lon), Number(v.lat)], zoom: 15.5, duration: 600 });
             } else {
               try {
                 const rshapes = await fetch("/api/route-shapes").then(res => res.json());
@@ -1144,9 +1405,11 @@
                 if (shapes && shapes.length > 0) {
                   const coords = await loadShape(shapes[0]);
                   if (coords && coords.length > 1) {
-                    map.getSource("route-line")?.setData({
+                    currentRouteCoords = coords;
+                    currentRouteColor = getRouteColor(m.id);
+                    map.getSource("route-remaining")?.setData({
                       type: "Feature",
-                      properties: { color: getRouteColor(m.id) },
+                      properties: { color: currentRouteColor },
                       geometry: { type: "LineString", coordinates: coords }
                     });
                   }
